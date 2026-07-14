@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+
+  {# --- Title chain: only append site suffix when there is room (<= 70 chars total). --- #}
+  {% set rawTitle = title if title else site.name %}
+  {% set fullTitle = rawTitle ~ " · " ~ site.shortName %}
+  {% if page.url == "/" %}
+    <title>{{ site.name }}</title>
+  {% elif fullTitle | length > 70 %}
+    <title>{{ rawTitle }}</title>
+  {% else %}
+    <title>{{ fullTitle }}</title>
+  {% endif %}
+
+  {# --- Description: per-page derived in eleventyComputed; fall back to site default. --- #}
+  {% set pageDesc = description or site.description %}
+  <meta name="description" content="{{ pageDesc }}"/>
+  <meta name="theme-color" content="{{ site.themeColor }}"/>
+  <meta name="robots" content="index, follow"/>
+  <meta name="author" content="{{ site.name }}"/>
+
+  <link rel="canonical" href="{{ site.url }}{{ page.url }}"/>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="apple-touch-icon" href="/assets/img/apple-touch-icon.png"/>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32x32.png"/>
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/img/favicon-16x16.png"/>
+  <link rel="manifest" href="/manifest.webmanifest"/>
+  <link rel="sitemap" type="application/xml" href="/sitemap.xml"/>
+
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+  <meta name="apple-mobile-web-app-title" content="{{ site.shortName }}"/>
+
+  <meta property="og:site_name" content="{{ site.name }}"/>
+  <meta property="og:locale" content="en_US"/>
+  <meta property="og:type" content="{% if layout == 'article.njk' or layout == 'overview.njk' %}article{% else %}website{% endif %}"/>
+  <meta property="og:title" content="{{ rawTitle }}"/>
+  <meta property="og:description" content="{{ pageDesc }}"/>
+  <meta property="og:url" content="{{ site.url }}{{ page.url }}"/>
+  <meta property="og:image" content="{{ site.url }}/assets/img/og-image.png"/>
+  <meta property="og:image:type" content="image/png"/>
+  <meta property="og:image:width" content="1200"/>
+  <meta property="og:image:height" content="630"/>
+  <meta property="og:image:alt" content="{{ site.shortName }} — spatial AI resource"/>
+
+  <meta name="twitter:card" content="summary_large_image"/>
+  <meta name="twitter:title" content="{{ rawTitle }}"/>
+  <meta name="twitter:description" content="{{ pageDesc }}"/>
+  <meta name="twitter:image" content="{{ site.url }}/assets/img/og-image.png"/>
+
+  <link rel="stylesheet" href="{{ '/assets/css/site.css' | assetHash }}"/>
+  <link rel="stylesheet" href="{{ '/assets/css/katex.min.css' | assetHash }}"/>
+
+  {# --- WebSite JSON-LD on the homepage. --- #}
+  {% if page.url == "/" %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "{{ site.name }}",
+    "url": "{{ site.url }}/",
+    "description": "{{ pageDesc | replace('"','\\"') }}",
+    "inLanguage": "en"
+  }
+  </script>
+  {% endif %}
+
+  {# --- Article / TechArticle JSON-LD on content pages. --- #}
+  {% if layout == 'article.njk' or layout == 'overview.njk' %}
+  {% set articleType = "TechArticle" %}
+  {% set buildDate = page.date | dateISO if page.date else (null | dateISO) %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "{{ articleType }}",
+    "headline": "{{ rawTitle | replace('"','\\"') }}",
+    "description": "{{ pageDesc | replace('"','\\"') }}",
+    "mainEntityOfPage": { "@type": "WebPage", "@id": "{{ site.url }}{{ page.url }}" },
+    "url": "{{ site.url }}{{ page.url }}",
+    "image": "{{ site.url }}/assets/img/og-image.png",
+    "inLanguage": "en",
+    "isAccessibleForFree": true,
+    "datePublished": "{{ buildDate }}",
+    "dateModified": "{{ buildDate }}",
+    "author": { "@type": "Organization", "name": "{{ site.name }}", "url": "{{ site.url }}/" },
+    "publisher": {
+      "@type": "Organization",
+      "name": "{{ site.name }}",
+      "logo": { "@type": "ImageObject", "url": "{{ site.url }}/assets/img/og-image.png" }
+    }
+  }
+  </script>
+
+  {# --- BreadcrumbList JSON-LD reflecting the URL hierarchy. --- #}
+  {% set crumbs = page.url | breadcrumb(collections.articles) %}
+  {% if crumbs.length %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "Home", "item": "{{ site.url }}/" }{% for c in crumbs %},
+      { "@type": "ListItem", "position": {{ loop.index + 1 }}, "name": "{{ c.title | replace('"','\\"') }}", "item": "{{ site.url }}{{ c.url }}" }{% endfor %}
+    ]
+  }
+  </script>
+  {% endif %}
+  {% endif %}
+</head>
+<body class="layout-{{ layout | replace('.njk','') }}">
+  {% include "header.njk" %}
+
+  <main id="content" class="site-main">
+    {% block content %}{{ content | safe }}{% endblock %}
+  </main>
+
+  {% include "footer.njk" %}
+
+  <script src="{{ '/assets/js/site.js' | assetHash }}" defer></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js").catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

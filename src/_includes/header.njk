@@ -1,0 +1,48 @@
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header" role="banner">
+  <div class="container container-wide site-header__inner">
+    <a class="brand" href="{{ site.url }}/" aria-label="{{ site.name }} — home">
+      <span class="brand__mark" aria-hidden="true">
+        <img src="/assets/img/logo.svg" alt="" width="36" height="36" loading="eager"/>
+      </span>
+      <span class="brand__text">
+        <span class="brand__title">Spatial LLM</span>
+        <span class="brand__sub">&amp; AI Agent Workflows</span>
+      </span>
+    </a>
+
+    <button type="button" class="nav-toggle" aria-controls="primary-nav" aria-expanded="false" aria-label="Toggle navigation">
+      {% set name = "menu" %}{% set size = 22 %}{% include "icon.njk" %}
+      {% set name = "close" %}{% set size = 22 %}{% include "icon.njk" %}
+    </button>
+
+    <nav id="primary-nav" class="primary-nav" aria-label="Primary">
+      <ul>
+        <li>
+          <a href="{{ site.url }}/" {% if page.url == "/" %}aria-current="page"{% endif %}>
+            {% set name = "home" %}{% set size = 18 %}{% include "icon.njk" %}
+            <span>Home</span>
+          </a>
+        </li>
+        <li>
+          <a href="{{ site.url }}/spatial-llm-architecture-core-concepts/" {% if page.url.startsWith("/spatial-llm-architecture-core-concepts") %}aria-current="page"{% endif %}>
+            {% set name = "architecture" %}{% set size = 18 %}{% include "icon.njk" %}
+            <span>Architecture</span>
+          </a>
+        </li>
+        <li>
+          <a href="{{ site.url }}/geospatial-prompt-engineering-tool-routing/" {% if page.url.startsWith("/geospatial-prompt-engineering-tool-routing") %}aria-current="page"{% endif %}>
+            {% set name = "routing" %}{% set size = 18 %}{% include "icon.njk" %}
+            <span>Prompt Engineering</span>
+          </a>
+        </li>
+        <li>
+          <a href="{{ site.url }}/geospatial-rag-pipelines/" {% if page.url.startsWith("/geospatial-rag-pipelines") %}aria-current="page"{% endif %}>
+            {% set name = "retrieval" %}{% set size = 18 %}{% include "icon.njk" %}
+            <span>RAG Pipelines</span>
+          </a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+</header>

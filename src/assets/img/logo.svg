@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="logo-title logo-desc">
+  <title id="logo-title">Spatial LLM &amp; AI Agent Workflows</title>
+  <desc id="logo-desc">A stylised globe of latitude and longitude lines overlaid with a neural-network of connected nodes.</desc>
+  <defs>
+    <linearGradient id="lg-globe" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1f7ae0"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="lg-net" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <radialGradient id="rg-core" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Outer ring -->
+  <circle cx="64" cy="64" r="56" fill="url(#lg-globe)"/>
+  <circle cx="64" cy="64" r="56" fill="url(#rg-core)" opacity="0.35"/>
+
+  <!-- Latitude / longitude graticule -->
+  <g fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.4" stroke-linecap="round">
+    <ellipse cx="64" cy="64" rx="56" ry="22"/>
+    <ellipse cx="64" cy="64" rx="56" ry="40"/>
+    <ellipse cx="64" cy="64" rx="22" ry="56"/>
+    <ellipse cx="64" cy="64" rx="40" ry="56"/>
+    <line x1="8" y1="64" x2="120" y2="64"/>
+    <line x1="64" y1="8" x2="64" y2="120"/>
+  </g>
+
+  <!-- Neural-network overlay -->
+  <g stroke="url(#lg-net)" stroke-width="2.2" stroke-linecap="round">
+    <line x1="34" y1="40" x2="64" y2="58"/>
+    <line x1="34" y1="40" x2="58" y2="86"/>
+    <line x1="64" y1="58" x2="94" y2="46"/>
+    <line x1="64" y1="58" x2="86" y2="92"/>
+    <line x1="58" y1="86" x2="86" y2="92"/>
+    <line x1="94" y1="46" x2="86" y2="92"/>
+  </g>
+  <g fill="url(#lg-net)" stroke="#ffffff" stroke-width="1.6">
+    <circle cx="34" cy="40" r="5"/>
+    <circle cx="94" cy="46" r="5"/>
+    <circle cx="58" cy="86" r="5"/>
+    <circle cx="86" cy="92" r="5"/>
+    <circle cx="64" cy="58" r="6.4"/>
+  </g>
+</svg>

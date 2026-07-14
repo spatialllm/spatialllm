@@ -1,0 +1,10 @@
+{
+  "name": "Spatial LLM & AI Agent Workflows",
+  "shortName": "Spatial LLM",
+  "tagline": "Production-focused resource for building, validating, and deploying spatial-aware AI systems.",
+  "description": "Production-focused resource for building, validating, and deploying spatial-aware AI systems — geospatial RAG, prompt-to-spatial-SQL, LLM-assisted geoprocessing, evaluation benchmarks, safety/validation, and pipeline integration.",
+  "url": "https://www.spatialllm.org",
+  "themeColor": "#1f7ae0",
+  "backgroundColor": "#f7f9fc",
+  "audience": "AI/ML engineers, spatial data scientists, Python GIS devs, platform teams"
+}

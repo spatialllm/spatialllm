@@ -1,0 +1,30 @@
+# Cloudflare Pages headers for spatialllm.org.
+# Pages serves this file from the build output root; no MIME wrap needed.
+
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+  Cross-Origin-Opener-Policy: same-origin
+
+# Long-cache immutable assets (CSS/JS/fonts/images/icons under /assets/).
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Service worker must never be cached aggressively — updates depend on it.
+/sw.js
+  Cache-Control: public, max-age=0, must-revalidate
+  Service-Worker-Allowed: /
+
+# Manifest is small + rarely changes, but should refresh quickly when it does.
+/manifest.webmanifest
+  Cache-Control: public, max-age=3600
+  Content-Type: application/manifest+json
+
+# Sitemap & robots should be re-checked often.
+/sitemap.xml
+  Cache-Control: public, max-age=3600
+/robots.txt
+  Cache-Control: public, max-age=3600

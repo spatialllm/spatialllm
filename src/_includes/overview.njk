@@ -1,0 +1,40 @@
+---
+layout: base.njk
+---
+<article class="overview">
+  <div class="container container-wide">
+    {% include "breadcrumbs.njk" %}
+
+    <header class="overview__hero">
+      <div class="overview__hero-icon" aria-hidden="true">
+        {% set name = icon or "compass" %}{% set size = 56 %}{% include "icon.njk" %}
+      </div>
+      <h1 class="overview__title gradient-title">{{ title }}</h1>
+      {% if description %}<p class="overview__lede">{{ description }}</p>{% endif %}
+    </header>
+
+    {% set children = page | children(collections.articles) %}
+    {% if children.length %}
+    <section class="overview__grid" aria-label="Articles in this topic">
+      <h2 class="section-title">Articles in this topic</h2>
+      <ul class="card-grid card-grid--three">
+        {% for child in children %}
+        <li class="card card--child">
+          <a href="{{ site.url }}{{ child.url }}">
+            <span class="card__icon" aria-hidden="true">
+              {% set name = "spark" %}{% set size = 28 %}{% include "icon.njk" %}
+            </span>
+            <span class="card__title">{{ child.data.title }}</span>
+            <span class="card__cta">Open article <span aria-hidden="true">→</span></span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    <section class="overview__body prose">
+      {{ content | safe }}
+    </section>
+  </div>
+</article>

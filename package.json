@@ -1,0 +1,26 @@
+{
+  "name": "spatialllm-org",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Spatial LLM & AI Agent Workflows — production-focused resource for building, validating and deploying spatial-aware AI systems.",
+  "scripts": {
+    "build": "eleventy",
+    "start": "eleventy --serve",
+    "clean": "rimraf _site",
+    "deploy": "npm run clean && npm run build && wrangler deploy",
+    "deploy:dryrun": "npm run clean && npm run build && wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "@11ty/eleventy": "^2.0.1",
+    "@11ty/eleventy-plugin-syntaxhighlight": "^5.0.0",
+    "@iktakahiro/markdown-it-katex": "^4.0.1",
+    "markdown-it": "^13.0.2",
+    "markdown-it-anchor": "^8.6.7",
+    "markdown-it-attrs": "^4.1.6",
+    "markdown-it-task-lists": "^2.1.1",
+    "mermaid": "^10.9.1",
+    "katex": "^0.16.11",
+    "rimraf": "^5.0.5",
+    "slugify": "^1.6.6"
+  }
+}

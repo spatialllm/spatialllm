@@ -1,0 +1,147 @@
+---
+layout: base.njk
+title: Spatial LLM & AI Agent Workflows
+description: Engineering patterns for spatial AI — geospatial RAG, prompt-to-spatial-SQL, LLM-assisted geoprocessing, validation, and deterministic pipeline routing.
+permalink: /
+---
+
+<section class="hero">
+  <div class="container container-wide hero__inner">
+    <img class="hero__logo" src="/assets/img/logo.svg" alt="" width="168" height="168"/>
+    <h1 class="hero__title gradient-title">Spatial LLM &amp; AI Agent Workflows</h1>
+    <p class="hero__tagline">A production-focused resource for building, validating, and deploying spatial-aware AI systems — engineered for AI/ML teams, spatial data scientists, and platform engineers.</p>
+
+    <div class="hero__ctas">
+      <a class="btn btn--primary" href="{{ site.url }}/spatial-llm-architecture-core-concepts/">
+        <span class="btn-icon" aria-hidden="true">{% set name = "architecture" %}{% set size = 18 %}{% include "icon.njk" %}</span>
+        Spatial LLM Architecture
+      </a>
+      <a class="btn btn--ghost" href="{{ site.url }}/geospatial-prompt-engineering-tool-routing/">
+        <span class="btn-icon icon-route-bg" aria-hidden="true">{% set name = "routing" %}{% set size = 18 %}{% include "icon.njk" %}</span>
+        Prompt Engineering &amp; Routing
+      </a>
+      <a class="btn btn--ghost" href="#explore">
+        <span class="btn-icon icon-globe-bg" aria-hidden="true">{% set name = "globe" %}{% set size = 18 %}{% include "icon.njk" %}</span>
+        Explore Articles
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container container-wide">
+    <div class="section__head">
+      <h2 class="section__title">Why a dedicated resource for spatial LLM workflows?</h2>
+      <p class="section__lede">Geospatial reasoning breaks naive AI pipelines. Coordinate drift, topology violations, and hallucinated geometry don&rsquo;t surface in standard text benchmarks — they surface in production. This site documents the engineering patterns that make spatial AI deployable.</p>
+    </div>
+    <div class="prose lede-grid">
+      <p><strong>Spatial LLM &amp; AI Agent Workflows</strong> exists because deploying language models against geographic data demands more than prompt engineering. Coordinate reference systems must be normalized before tokenization. Topology must be validated before inference. Low-confidence model output must route to deterministic GIS backends rather than corrupting downstream maps. The articles collected here treat those guardrails as first-class engineering work, not afterthoughts.</p>
+      <p>Every pattern here is grounded in production-ready Python: <code>geopandas</code>, <code>shapely</code>, <code>pyproj</code>, <code>rasterio</code>, and PostGIS at the data layer; structured prompting, schema-grounded tool dispatch, and observable agent routing at the inference layer. Code samples are written for AI/ML engineers who are comfortable with both transformer pipelines and spatial joins.</p>
+      <p>The content is organized around three core areas. <a href="{{ site.url }}/spatial-llm-architecture-core-concepts/">Spatial LLM Architecture &amp; Core Concepts</a> covers the validation-first ingestion, geometry tokenization, embeddings, evaluation, and fallback routing required to keep spatial reasoning deterministic at its edges. <a href="{{ site.url }}/geospatial-prompt-engineering-tool-routing/">Geospatial Prompt Engineering &amp; Tool Routing</a> covers prompt-to-spatial-SQL generation, async vs. sync geoprocessing, function-calling schemas, agent orchestration, and error mapping. <a href="{{ site.url }}/geospatial-rag-pipelines/">Geospatial RAG Pipelines</a> covers retrieval-augmented generation over geographic corpora — spatial vector store selection, retrieval-augmented CRS resolution, chunk-boundary strategies, and spatial reranking.</p>
+      <p>Use it as a reference while wiring up an agent, as a checklist before promoting a spatial model to production, or as a starting point for evaluating your own benchmark harness.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="explore">
+  <div class="container container-wide">
+    <h2 class="section-title">Explore the topics</h2>
+    <ul class="card-grid">
+      {% for topic in collections.topics %}
+      <li class="card card--featured">
+        <a href="{{ site.url }}{{ topic.url }}">
+          <span class="card__icon" aria-hidden="true">
+            {% set name = topic.data.icon or "compass" %}{% set size = 28 %}{% include "icon.njk" %}
+          </span>
+          <span class="card__eyebrow">Topic {{ loop.index }}</span>
+          <span class="card__title">{{ topic.data.title }}</span>
+          <span class="card__desc">
+            {% if topic.url == "/spatial-llm-architecture-core-concepts/" %}
+              Validation-first ingestion, geometry tokenization, embeddings, evaluation, and deterministic fallbacks for the inference stack.
+            {% elif topic.url == "/geospatial-prompt-engineering-tool-routing/" %}
+              Prompt-to-spatial-SQL, async vs. sync workflows, function-calling schemas, agent orchestration, and error mapping.
+            {% else %}
+              Retrieval-augmented generation over geographic corpora: spatial vector stores, CRS resolution, chunking, and reranking.
+            {% endif %}
+          </span>
+          <span class="card__cta">Open topic <span aria-hidden="true">→</span></span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container container-wide">
+    <div class="section__head">
+      <h2 class="section-title">Start here</h2>
+      <p class="section__lede">New to spatial AI engineering? These pages cover the load-bearing decisions — get them right and the rest of the pipeline stays deterministic.</p>
+    </div>
+    <ul class="card-grid card-grid--three">
+      <li class="card card--child">
+        <a href="{{ site.url }}/spatial-llm-architecture-core-concepts/coordinate-reference-system-normalization/">
+          <span class="card__eyebrow">Architecture</span>
+          <span class="card__title">Coordinate Reference System Normalization</span>
+          <span class="card__desc">Normalize projections before tokenization so every downstream stage can assume one CRS.</span>
+          <span class="card__cta">Read <span aria-hidden="true">&rarr;</span></span>
+        </a>
+      </li>
+      <li class="card card--child">
+        <a href="{{ site.url }}/spatial-llm-architecture-core-concepts/geometry-tokenization-strategies/">
+          <span class="card__eyebrow">Architecture</span>
+          <span class="card__title">Geometry Tokenization Strategies</span>
+          <span class="card__desc">Turn polygons and linestrings into token sequences a model can reason over without losing topology.</span>
+          <span class="card__cta">Read <span aria-hidden="true">&rarr;</span></span>
+        </a>
+      </li>
+      <li class="card card--child">
+        <a href="{{ site.url }}/geospatial-prompt-engineering-tool-routing/prompt-to-spatial-sql-generation/">
+          <span class="card__eyebrow">Prompt Engineering</span>
+          <span class="card__title">Prompt-to-Spatial-SQL Generation</span>
+          <span class="card__desc">Generate schema-grounded PostGIS queries from natural language with validation gates.</span>
+          <span class="card__cta">Read <span aria-hidden="true">&rarr;</span></span>
+        </a>
+      </li>
+      <li class="card card--child">
+        <a href="{{ site.url }}/geospatial-rag-pipelines/">
+          <span class="card__eyebrow">RAG Pipelines</span>
+          <span class="card__title">Geospatial RAG Pipelines</span>
+          <span class="card__desc">Retrieve geographically correct context — right CRS, right region, intact geometries — before the model generates.</span>
+          <span class="card__cta">Read <span aria-hidden="true">&rarr;</span></span>
+        </a>
+      </li>
+      <li class="card card--child">
+        <a href="{{ site.url }}/spatial-llm-architecture-core-concepts/evaluation-and-benchmarking-for-spatial-llms/">
+          <span class="card__eyebrow">Architecture</span>
+          <span class="card__title">Evaluation &amp; Benchmarking for Spatial LLMs</span>
+          <span class="card__desc">Measure spatial IoU, coordinate hallucination, and topology violations before promoting a model.</span>
+          <span class="card__cta">Read <span aria-hidden="true">&rarr;</span></span>
+        </a>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container container-wide">
+    <h2 class="section-title">What you&rsquo;ll find inside</h2>
+    <div class="card-grid card-grid--three">
+      {% for topic in collections.topics %}
+      {% set kids = topic | children(collections.articles) %}
+      <div class="card card--child">
+        <a href="{{ site.url }}{{ topic.url }}">
+          <span class="card__icon" aria-hidden="true">{% set name = topic.data.icon %}{% set size = 26 %}{% include "icon.njk" %}</span>
+          <span class="card__eyebrow">{{ kids.length }} articles</span>
+          <span class="card__title">{{ topic.data.title }}</span>
+          <ul class="article-list">
+            {% for k in kids %}
+            <li>{{ k.data.title }}</li>
+            {% endfor %}
+          </ul>
+        </a>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>

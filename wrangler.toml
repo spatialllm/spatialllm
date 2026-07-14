@@ -1,0 +1,12 @@
+# Cloudflare Worker (Workers Static Assets) for spatialllm.org.
+# The Worker serves the built `_site/` tree directly — no worker script needed.
+# Picks up `_headers` and `_redirects` from the output root the same way Pages does.
+name = "spatialllm"
+compatibility_date = "2025-05-27"
+
+[assets]
+directory = "./_site"
+not_found_handling = "404-page"
+
+[observability]
+enabled = true

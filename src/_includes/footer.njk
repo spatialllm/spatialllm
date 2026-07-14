@@ -1,0 +1,42 @@
+<footer class="site-footer" role="contentinfo">
+  <div class="container container-wide site-footer__inner">
+    <div class="site-footer__brand">
+      <img src="/assets/img/logo.svg" alt="" width="32" height="32"/>
+      <div>
+        <div class="site-footer__title">{{ site.name }}</div>
+        <p class="site-footer__tagline">{{ site.tagline }}</p>
+      </div>
+    </div>
+
+    <div class="site-footer__cols">
+      <div>
+        <h2>Site</h2>
+        <ul>
+          <li><a href="{{ site.url }}/">Home</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Topics</h2>
+        <ul>
+          {% for topic in collections.topics %}
+          <li><a href="{{ site.url }}{{ topic.url }}">{{ topic.data.title }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div>
+        <h2>About</h2>
+        <ul>
+          <li><span>Audience: {{ site.audience }}</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="site-footer__bottom">
+    <div class="container container-wide site-footer__bottom-inner">
+      <small>&copy; {{ null | currentYear }} {{ site.name }}.</small>
+      <a class="site-footer__social" href="https://github.com/spatialllm" aria-label="{{ site.shortName }} on GitHub" rel="noopener">
+        {% set name = "github" %}{% set size = 22 %}{% include "icon.njk" %}
+      </a>
+    </div>
+  </div>
+</footer>

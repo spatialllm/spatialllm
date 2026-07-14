@@ -1,0 +1,49 @@
+---
+layout: base.njk
+---
+<article class="article">
+  <div class="container container-wide">
+    {% include "breadcrumbs.njk" %}
+
+    <header class="article__header">
+      <h1 class="article__title gradient-title">{{ title }}</h1>
+      {% if description %}<p class="article__lede">{{ description }}</p>{% endif %}
+    </header>
+
+    <div class="article__body prose">
+      {{ content | safe }}
+    </div>
+
+    {# Related: siblings + parent #}
+    {% set sibs = page | siblings(collections.articles) %}
+    {% set parentUrl = page.url | parentUrl %}
+    {% set parent = null %}
+    {% for a in collections.articles %}{% if a.url == parentUrl %}{% set parent = a %}{% endif %}{% endfor %}
+
+    {% if sibs.length or parent %}
+    <aside class="related" aria-label="Related articles">
+      <h2>Related</h2>
+      <ul class="card-grid">
+        {% if parent and parent.url != "/" %}
+        <li class="card card--related">
+          <a href="{{ site.url }}{{ parent.url }}">
+            <span class="card__eyebrow">Up one level</span>
+            <span class="card__title">{{ parent.data.title }}</span>
+            <span class="card__cta">Go to section <span aria-hidden="true">→</span></span>
+          </a>
+        </li>
+        {% endif %}
+        {% for s in sibs %}
+        <li class="card card--related">
+          <a href="{{ site.url }}{{ s.url }}">
+            <span class="card__eyebrow">Related article</span>
+            <span class="card__title">{{ s.data.title }}</span>
+            <span class="card__cta">Read more <span aria-hidden="true">→</span></span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </aside>
+    {% endif %}
+  </div>
+</article>
