@@ -3,6 +3,20 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <meta name="color-scheme" content="light dark"/>
+
+  {# --- No-flash theme bootstrap: stored choice wins, else the OS preference. --- #}
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem("spatialllm:theme");
+        var theme = stored === "light" || stored === "dark"
+          ? stored
+          : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (e) { /* private mode / no storage — fall through to the CSS media query */ }
+    })();
+  </script>
 
   {# --- Title chain: only append site suffix when there is room (<= 70 chars total). --- #}
   {% set rawTitle = title if title else site.name %}
@@ -71,7 +85,9 @@
   {# --- Article / TechArticle JSON-LD on content pages. --- #}
   {% if layout == 'article.njk' or layout == 'overview.njk' %}
   {% set articleType = "TechArticle" %}
-  {% set buildDate = page.date | dateISO if page.date else (null | dateISO) %}
+  {% set buildDate = null | dateISO %}
+  {% set publishedDate = datePublished if datePublished else buildDate %}
+  {% set modifiedDate = dateModified if dateModified else buildDate %}
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -83,8 +99,8 @@
     "image": "{{ site.url }}/assets/img/og-image.png",
     "inLanguage": "en",
     "isAccessibleForFree": true,
-    "datePublished": "{{ buildDate }}",
-    "dateModified": "{{ buildDate }}",
+    "datePublished": "{{ publishedDate }}",
+    "dateModified": "{{ modifiedDate }}",
     "author": { "@type": "Organization", "name": "{{ site.name }}", "url": "{{ site.url }}/" },
     "publisher": {
       "@type": "Organization",

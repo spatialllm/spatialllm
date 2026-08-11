@@ -1,169 +1,227 @@
+---
+title: Implementing Fallback Routing for Failed Spatial Queries
+description: Build the router that walks a degradation ladder within one deadline, classifies failures into retry, degrade and stop, and returns an answer that states what it lost.
+slug: implementing-fallback-routing-for-failed-spatial-queries
+type: howto
+breadcrumb: Implementing Fallback Routing
+datePublished: 2025-02-12
+dateModified: 2026-08-11
+---
+
 # Implementing Fallback Routing for Failed Spatial Queries
 
-Spatial LLM pipelines routinely encounter execution failures when processing complex geospatial primitives. The primary failure vector typically stems from geometry tokenization limits, coordinate reference system (CRS) misalignment, or spatial embedding model drift during semantic parsing. When a primary inference path cannot resolve a spatial predicate or geometric operation, the pipeline must degrade gracefully rather than terminate. **Implementing Fallback Routing for Failed Spatial Queries** requires a deterministic error classification layer, strict schema validation, and a tiered execution strategy that seamlessly redirects requests to alternative processing backends.
+Most fallback logic is written as nested exception handlers, and it accumulates: a retry here, a cached read there, a bare `except` that swallowed something once. This guide replaces that with a router built from a declared ladder, so the degradation path is data you can review rather than control flow you have to trace — the working implementation of [fallback routing for geospatial queries](/spatial-llm-architecture-core-concepts/fallback-routing-for-geospatial-queries/).
 
-For AI/ML engineers, spatial data scientists, and platform teams building production-grade geospatial AI, resilience must be engineered at the orchestration layer. This article provides a production-ready blueprint for intercepting spatial query failures, validating coordinate payloads, and routing to deterministic fallback paths without compromising downstream analytical integrity.
+## When to Use This Approach
 
-## Failure Mode Taxonomy and Root Cause Analysis
+Use a declared ladder when there is more than one way to answer and they differ in cost or fidelity. A single-route operation needs a timeout and an error message, not a router.
 
-Before routing logic can be deployed, failure modes must be explicitly categorized. In production environments, spatial query failures rarely originate from the LLM's language understanding capabilities. Instead, they emerge from downstream geospatial execution constraints:
+| Situation | Ladder | Bottom rung |
+|-----------|--------|-------------|
+| Geometry query with a cache | Exact, simplified, cached | Refusal |
+| Frame resolution | Index lookup, local subset, default | Flagged fallback |
+| Raster statistic | Full resolution, coarser product, none | Refusal with the reason |
+| Boundary membership | Exact only | Refusal — no degradation is acceptable |
+| Descriptive lookup | Exact, cached, stale-cached | Answer with an age |
 
-1. **Topology Violations Post-Tokenization**: LLMs often output WKT or GeoJSON with floating-point precision artifacts that violate planar graph rules (e.g., self-intersections, ring orientation errors, duplicate vertices). These artifacts trigger `TopologicalError` exceptions during spatial joins or buffering operations.
-2. **CRS Normalization Drift**: Mixed coordinate systems (e.g., EPSG:4326 vs. EPSG:3857) cause silent projection mismatches, resulting in zero-area intersections or out-of-bounds errors during spatial joins. Without explicit normalization, vector overlays fail deterministically.
-3. **Context Window Exhaustion**: High-resolution vector geometries or dense raster tile requests exceed token limits, forcing truncation that breaks spatial indexing and invalidates downstream predicate evaluation.
-4. **Vector-Raster Hybrid Misalignment**: When querying hybrid pipelines, rasterized boundaries may not align with vector centroids, causing spatial join failures or empty result sets due to pixel-to-vertex discretization gaps.
+The fourth row is the one to configure first. A ladder that degrades every intent equally will eventually answer a regulatory containment question from a simplified geometry, and that answer is a coin flip presented as a fact.
 
-These failure modes necessitate a routing architecture that intercepts exceptions, validates the geometric payload, and dispatches to a secondary execution path. This design aligns with established [Spatial LLM Architecture & Core Concepts](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/) where resilience is engineered at the orchestration layer rather than patched at the model level.
+<figure class="diagram">
+<svg viewBox="16 38 748 188" role="img" aria-labelledby="ifr-decl-t ifr-decl-d" xmlns="http://www.w3.org/2000/svg"><title id="ifr-decl-t">A declared ladder against nested exception handlers</title><desc id="ifr-decl-d">A ladder expressed as data is reviewable in one place, while the same behaviour spread through nested exception handlers has to be traced through the code to be understood.</desc><rect x="16" y="38" width="748" height="188" fill="#ffffff"/><rect x="30" y="52" width="340" height="160" rx="8" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><text x="200" y="84" fill="#1f2937" font-size="13.5" text-anchor="middle" font-weight="600">nested handlers</text><g fill="#5b6471" font-size="12" text-anchor="middle"><text x="200" y="114">order implied by nesting</text><text x="200" y="140">claims implied by which branch</text><text x="200" y="166">a bare except somewhere</text><text x="200" y="192">reviewed by tracing</text></g><rect x="410" y="52" width="340" height="160" rx="8" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><text x="580" y="84" fill="#1f2937" font-size="13.5" text-anchor="middle" font-weight="600">declared ladder</text><g fill="#5b6471" font-size="12" text-anchor="middle"><text x="580" y="114">order is a list</text><text x="580" y="140">each rung states its claim</text><text x="580" y="166">one place to add a route</text><text x="580" y="192">reviewed by reading</text></g></svg>
+<figcaption><b>Same behaviour, different reviewability.</b> The nested form is not wrong; it is simply impossible to answer "what happens when the geometry engine is down" without reading every handler, which is why it drifts.</figcaption>
+</figure>
 
-## Routing Architecture and Decision Logic
+## Implementation
 
-A robust fallback router operates as a stateless middleware component positioned between the LLM's spatial reasoning module and the geospatial execution engine. The router implements a three-tier decision matrix:
-
-- **Tier 1 (Primary)**: Direct execution of the LLM-generated spatial query against a PostGIS/GeoPandas backend. Assumes valid topology, normalized CRS, and within-bounds coordinates.
-- **Tier 2 (Repair & Normalize)**: Automatic CRS transformation, topology repair (e.g., `make_valid` for self-intersections), and geometry simplification before re-execution.
-- **Tier 3 (Fallback Abstraction)**: Conversion to bounding box queries, raster tile sampling, or cached spatial index lookups when vector processing remains unstable.
-
-The routing decision is driven by a deterministic exception classifier. Rather than relying on heuristic retries, the system maps specific error signatures to tier transitions. This approach is detailed in [Fallback Routing for Geospatial Queries](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/fallback-routing-for-geospatial-queries/), where exception routing replaces blind retry loops.
-
-## Core Implementation Blueprint
-
-The following Python implementation demonstrates a production-grade spatial fallback router. It enforces explicit coordinate validation, structured error handling, and clear pipeline integration hooks.
+The router takes a ladder, a deadline and a classifier, and returns an outcome that always says which rung produced it.
 
 ```python
 import logging
-import json
-from typing import Dict, Any, Optional
-from shapely.geometry import shape, box
-from shapely.validation import explain_validity
-from shapely.validation import make_valid
-from pyproj import CRS, Transformer
-from shapely.errors import TopologicalError
-import geopandas as gpd
+import time
+from dataclasses import dataclass
+from typing import Callable, Optional, Sequence
 
-logger = logging.getLogger("spatial_fallback_router")
+log = logging.getLogger("fallback_router")
 
-class SpatialValidationError(Exception):
-    """Raised when coordinate validation fails."""
-    pass
 
-class SpatialExecutionError(Exception):
-    """Raised when a geospatial operation fails."""
-    pass
+class Transient(Exception):
+    """Worth one retry on the same rung."""
 
-class SpatialFallbackRouter:
-    def __init__(self, primary_crs: str = "EPSG:4326", fallback_crs: str = "EPSG:3857"):
-        self.primary_crs = CRS.from_user_input(primary_crs)
-        self.fallback_crs = CRS.from_user_input(fallback_crs)
-        self.transformer = Transformer.from_crs(self.primary_crs, self.fallback_crs, always_xy=True)
 
-    def validate_coordinates(self, geojson: Dict[str, Any]) -> bool:
-        """
-        Explicit coordinate validation: bounds, CRS, and topology checks.
-        Hook this into your FastAPI/GraphQL input validation layer to
-        reject malformed payloads before they consume compute resources.
-        """
-        try:
-            geom = shape(geojson)
-            if not geom.is_valid:
-                reason = explain_validity(geom)
-                logger.warning(f"Invalid geometry detected: {reason}")
-                return False
+class Degradable(Exception):
+    """This rung cannot serve this input; move down."""
 
-            # Coordinate bounds validation for WGS84
-            minx, miny, maxx, maxy = geom.bounds
-            if not (-180 <= minx <= 180 and -90 <= miny <= 90 and
-                    -180 <= maxx <= 180 and -90 <= maxy <= 90):
-                raise SpatialValidationError("Coordinates exceed valid WGS84 bounds.")
 
-            return True
-        except SpatialValidationError:
-            raise
-        except Exception as e:
-            logger.error(f"Coordinate validation failed: {str(e)}")
-            return False
+class Fatal(Exception):
+    """Stop — neither retrying nor degrading can help."""
 
-    def execute_tier_1(self, query: Dict[str, Any]) -> gpd.GeoDataFrame:
-        """Primary execution path. Assumes valid topology and normalized CRS."""
-        try:
-            logger.info("Executing Tier 1 (Primary) spatial query...")
-            return gpd.GeoDataFrame(geometry=[shape(query["geometry"])], crs=self.primary_crs)
-        except Exception as e:
-            logger.error(f"Tier 1 execution failed: {str(e)}")
-            raise SpatialExecutionError("Primary path failed.") from e
 
-    def execute_tier_2(self, query: Dict[str, Any]) -> gpd.GeoDataFrame:
-        """Repair & Normalize: topology fix, CRS transform, simplification."""
-        try:
-            logger.info("Routing to Tier 2 (Repair & Normalize)...")
-            geom = shape(query["geometry"])
+@dataclass(frozen=True)
+class Rung:
+    name: str
+    run: Callable[[dict, float], object]      # (request, seconds_left) -> value
+    claim: str                                 # what an answer from here may assert
+    typical_s: float
 
-            # Topology repair via make_valid (preferred over buffer(0) in Shapely 2+)
-            repaired = make_valid(geom)
-            if repaired.is_empty:
-                raise SpatialExecutionError("Geometry collapsed after repair.")
 
-            transformed = gpd.GeoDataFrame(geometry=[repaired], crs=self.primary_crs)
-            transformed = transformed.to_crs(self.fallback_crs)
+@dataclass(frozen=True)
+class Outcome:
+    value: Optional[object]
+    rung: str
+    claim: str
+    note: str
+    elapsed_s: float
+    attempts: int
 
-            logger.info("Tier 2 repair successful. Returning normalized geometry.")
-            return transformed
-        except SpatialExecutionError:
-            raise
-        except Exception as e:
-            logger.error(f"Tier 2 repair failed: {str(e)}")
-            raise SpatialExecutionError("Repair path failed.") from e
 
-    def execute_tier_3(self, query: Dict[str, Any]) -> gpd.GeoDataFrame:
-        """Fallback Abstraction: Bounding box query or raster sampling."""
-        try:
-            logger.info("Routing to Tier 3 (Fallback Abstraction)...")
-            geom = shape(query["geometry"])
-            bbox = box(*geom.bounds)
+def classify(exc: Exception) -> str:
+    if isinstance(exc, Fatal):
+        return "stop"
+    if isinstance(exc, Transient):
+        return "retry"
+    if isinstance(exc, Degradable):
+        return "degrade"
+    log.warning("unclassified %s — treating as degradable", type(exc).__name__)
+    return "degrade"
 
-            bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=self.primary_crs)
-            bbox_gdf = bbox_gdf.to_crs(self.fallback_crs)
 
-            logger.info("Tier 3 fallback successful. Returning bounding box approximation.")
-            return bbox_gdf
-        except Exception as e:
-            logger.error(f"Tier 3 fallback failed: {str(e)}")
-            raise SpatialExecutionError("All fallback paths exhausted.") from e
+def route(request: dict, ladder: Sequence[Rung], budget_s: float) -> Outcome:
+    """Walk the ladder inside one budget. Always returns an Outcome."""
+    if not ladder:
+        return Outcome(None, "misconfigured", "none", "no rungs configured", 0.0, 0)
+    if budget_s <= 0:
+        return Outcome(None, "misconfigured", "none", f"non-positive budget {budget_s}", 0.0, 0)
 
-    def route_query(self, query: Dict[str, Any]) -> gpd.GeoDataFrame:
-        """Deterministic routing with explicit error classification."""
-        if not self.validate_coordinates(query["geometry"]):
-            raise SpatialValidationError("Input geometry failed coordinate validation.")
+    started = time.monotonic()
+    attempts = 0
 
-        for tier_fn in (self.execute_tier_1, self.execute_tier_2, self.execute_tier_3):
+    def left() -> float:
+        return budget_s - (time.monotonic() - started)
+
+    for rung in ladder:
+        remaining = left()
+        if remaining <= 0:
+            log.info("budget spent before %s", rung.name)
+            break
+        if remaining < rung.typical_s * 0.5:
+            log.info("skipping %s: %.2fs left, typically %.2fs",
+                     rung.name, remaining, rung.typical_s)
+            continue
+        for attempt in (1, 2):
+            attempts += 1
             try:
-                return tier_fn(query)
-            except SpatialExecutionError:
-                continue
+                value = rung.run(request, left())
+                return Outcome(value, rung.name, rung.claim, "",
+                               time.monotonic() - started, attempts)
+            except Exception as exc:
+                action = classify(exc)
+                log.info("%s attempt %d failed (%s): %s", rung.name, attempt, action, exc)
+                if action == "stop":
+                    return Outcome(None, rung.name, "none", f"stopped: {exc}",
+                                   time.monotonic() - started, attempts)
+                if action == "degrade" or attempt == 2 or left() <= 0:
+                    break
 
-        logger.critical("All routing tiers exhausted. Returning empty result.")
-        return gpd.GeoDataFrame(crs=self.primary_crs)
+    return Outcome(None, "refusal", "none",
+                   "no route could answer within the time available",
+                   time.monotonic() - started, attempts)
 ```
 
-## Coordinate Validation and Safety Protocols
+The two misconfiguration guards look trivial and earn their place. An empty ladder is the natural consequence of trimming for an intent that has no exact rung configured, and without the guard it presents as a refusal — sending an investigation after missing data when the real problem is a missing configuration entry.
 
-Coordinate validation is the first line of defense against LLM hallucination and tokenization drift. The validation layer must enforce:
+Trimming the ladder per intent is what enforces the non-degradable cases, and it belongs before routing rather than inside it.
 
-1. **Bounds Enforcement**: Strict clamping to `[-180, 180]` longitude and `[-90, 90]` latitude for EPSG:4326. Out-of-bounds coordinates indicate projection confusion or floating-point overflow.
-2. **Topology Verification**: Use `shapely.validation.explain_validity()` to catch self-intersections, unclosed rings, or duplicate nodes before they reach the database engine.
-3. **CRS Assertion**: Explicitly assert the input CRS against the pipeline's expected standard. Mismatched projections should trigger immediate normalization rather than silent geometric distortion.
+```python
+NON_DEGRADABLE = {"contains", "regulatory", "boundary"}
 
-For production deployments, integrate validation directly into your API gateway or message broker consumer. Refer to the [OGC Simple Features Specification](https://www.ogc.org/standards/sfs) for formal geometry compliance rules. When working with Python GIS stacks, the [Shapely documentation](https://shapely.readthedocs.io/) provides exhaustive validation utilities that should be wrapped in your router's pre-flight checks.
 
-## Pipeline Integration Next Steps
+def ladder_for(intent: str, ladder: Sequence[Rung]) -> Sequence[Rung]:
+    """Trim rungs whose claim cannot support this intent."""
+    if intent in NON_DEGRADABLE:
+        trimmed = [r for r in ladder if r.claim == "exact"]
+        if not trimmed:
+            log.warning("intent %r admits no rung: no exact route configured", intent)
+        return trimmed
+    return ladder
+```
 
-Implementing fallback routing requires more than isolated code modules. Platform teams must embed the router into the broader geospatial AI lifecycle:
+<figure class="diagram">
+<svg viewBox="16 38 748 178" role="img" aria-labelledby="ifr-class-t ifr-class-d" xmlns="http://www.w3.org/2000/svg"><title id="ifr-class-t">Three failure classes and what each one does to the walk</title><desc id="ifr-class-d">A transient failure retries once on the same rung, a degradable failure moves down immediately, and a fatal failure stops the walk entirely.</desc><rect x="16" y="38" width="748" height="178" fill="#ffffff"/><rect x="30" y="52" width="230" height="150" rx="8" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/><rect x="275" y="52" width="230" height="150" rx="8" fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2"/><rect x="520" y="52" width="230" height="150" rx="8" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><g fill="#1f2937" font-size="13.5" text-anchor="middle" font-weight="600"><text x="145" y="84">transient</text><text x="390" y="84">degradable</text><text x="635" y="84">fatal</text></g><g fill="#5b6471" font-size="12" text-anchor="middle"><text x="145" y="114">a timeout, a blip</text><text x="145" y="140">one retry here</text><text x="145" y="168">then move down</text><text x="390" y="114">bad input for this rung</text><text x="390" y="140">retrying is pointless</text><text x="390" y="168">move down at once</text><text x="635" y="114">not authorised, not valid</text><text x="635" y="140">no rung can help</text><text x="635" y="168">stop and say why</text></g></svg>
+<figcaption><b>Classification is what stops a router wasting a budget.</b> Retrying a malformed geometry three times on three rungs is nine identical failures and one exhausted deadline, and it is what an unclassified handler does by default.</figcaption>
+</figure>
 
-1. **Async Execution Wrappers**: Deploy the router inside Celery, Ray, or FastAPI background tasks. Use exponential backoff with jitter for transient database locks, but bypass retries for deterministic topology failures.
-2. **Structured Telemetry**: Log tier transitions, validation failures, and execution latencies using OpenTelemetry. Tag metrics with `spatial_tier`, `crs_mismatch`, and `topology_repaired` to enable dashboard-driven SLO monitoring.
-3. **Schema Enforcement**: Define Pydantic models for incoming spatial payloads. Reject requests missing `type`, `coordinates`, or `crs` fields before they reach the router.
-4. **CI/CD Spatial Testing**: Maintain a golden dataset of known-failing geometries (e.g., self-intersecting polygons, polar coordinates, empty rings). Run regression tests against the router to ensure tier transitions remain deterministic after dependency updates.
-5. **Database Index Alignment**: Ensure your PostGIS or DuckDB spatial indexes match the fallback CRS. Mismatched index projections cause full-table scans during Tier 3 bounding box queries. Consult the [PostGIS documentation](https://postgis.net/docs/) for optimal index creation on mixed-CRS workloads.
+## Validation & Testing
 
-## Conclusion
+```python
+def test_ladder_reaches_the_cache_when_engines_fail():
+    ladder = [_failing("exact", Degradable), _failing("simplified", Degradable),
+              _returning("cached", "cached-value", claim="cached")]
+    out = route({}, ladder, budget_s=2.0)
+    assert out.value == "cached-value" and out.claim == "cached"
 
-Implementing Fallback Routing for Failed Spatial Queries transforms brittle LLM-driven geospatial pipelines into resilient, production-grade systems. By intercepting topology violations, normalizing coordinate drift, and tiering execution paths, platform teams can guarantee graceful degradation without sacrificing analytical accuracy. The key lies in strict pre-flight validation, deterministic exception routing, and continuous telemetry integration. As spatial embedding models and geometry tokenization strategies evolve, this routing architecture will remain the foundational safety layer for enterprise geospatial AI.
+
+def test_fatal_stops_the_walk():
+    ladder = [_failing("exact", Fatal), _returning("cached", "should-not-run")]
+    out = route({}, ladder, budget_s=2.0)
+    assert out.value is None and "stopped" in out.note
+
+
+def test_transient_retries_once_then_degrades():
+    ladder = [_failing("exact", Transient), _returning("cached", "v")]
+    out = route({}, ladder, budget_s=2.0)
+    assert out.value == "v" and out.attempts == 3          # two on the first rung, one on the second
+
+
+def test_non_degradable_intent_refuses_rather_than_degrading():
+    ladder = ladder_for("contains", [_failing("exact", Degradable),
+                                     _returning("cached", "v", claim="cached")])
+    out = route({}, ladder, budget_s=2.0)
+    assert out.value is None and out.rung == "refusal"
+
+
+def test_empty_ladder_reports_misconfiguration():
+    out = route({}, [], budget_s=1.0)
+    assert out.rung == "misconfigured"
+```
+
+The last two are the tests that matter over time. The non-degradable case is a policy that will be quietly eroded by anyone adding a convenient cached rung, and the misconfiguration case is the one that turns a silent refusal into a legible error.
+
+Build the fixtures as small helpers that fail in a stated way rather than as mocks of real dependencies. The router's behaviour depends only on the exception class it sees, so testing it against a real geometry engine tests the engine and leaves the interesting cases — fatal, transient, misconfigured — unexercised.
+
+## Gotchas & Edge Cases
+
+**A bare exception handler above the router.** It converts every classified outcome back into an opaque failure. The router already returns rather than raising for expected conditions; anything it does raise is a bug worth surfacing.
+
+**Retry counts that multiply across rungs.** Two attempts on each of four rungs is eight calls to systems that are probably all unhealthy at once. One retry, on the first rung only, is usually the right budget.
+
+**Claims that drift from behaviour.** A rung labelled "simplified" whose tolerance was later increased still reports the same claim string. Assert the relationship — a simplified rung must report the tolerance it actually applied.
+
+**Fallback rungs that are never exercised.** They only run during incidents, which is the worst time to discover a bug. Fail the rungs above them in continuous integration and assert both the value and the claim.
+
+<figure class="diagram">
+<svg viewBox="26 36 662 200" role="img" aria-labelledby="ifr-untested-t ifr-untested-d" xmlns="http://www.w3.org/2000/svg"><title id="ifr-untested-t">Rungs exercised only by incidents</title><desc id="ifr-untested-d">The top rung runs constantly and is well tested by traffic; the lower rungs run only when something is already broken, which is the worst time to discover a defect in them.</desc><rect x="26" y="36" width="662" height="200" fill="#ffffff"/><rect x="40" y="50" width="620" height="40" rx="5" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="40" y="100" width="150" height="40" rx="5" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/><rect x="40" y="150" width="60" height="40" rx="5" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><g fill="#1f2937" font-size="12"><text x="60" y="76">exact — 93% of traffic</text><text x="60" y="126">simplified — 6%</text><text x="120" y="176">cached — 1%, and only during incidents</text></g><text x="380" y="218" fill="#1f2937" font-size="13" text-anchor="middle">Fail the rungs above it in continuous integration, or it is untested code</text></svg>
+<figcaption><b>Traffic tests the top rung and nothing else.</b> The rungs that matter most when things go wrong are the ones with the least exposure to normal operation, which inverts the usual relationship between usage and confidence.</figcaption>
+</figure>
+
+**Ladders that grow.** Every rung is a code path, an outcome to explain and a claim to keep honest. Three or four covers nearly every real degradation; eight is usually two ladders that should be separate.
+
+**The refusal treated as an error.** A refusal is a successful outcome of the router — it means no route could answer honestly. Counting it as an error rate makes a well-behaved system look broken and hides the actual error rate underneath it.
+
+## Frequently Asked Questions
+
+<details class="faq-item"><summary><span>Where should the ladder be defined?</span></summary><p>In configuration adjacent to the intent classification, so the two are read together. A ladder buried in the function that uses it is invisible to anyone asking what happens when a dependency fails, and that question is asked most often by people who are not in that file. Keeping it as a list of named rungs with claims also makes review possible for people who do not read the implementation.</p></details>
+
+<details class="faq-item"><summary><span>Should the router emit metrics itself?</span></summary><p>Yes, and the distribution across rungs is the single most useful signal it produces. A system serving ninety per cent from the top rung is healthy; the same system serving forty per cent from cache has a degradation that no error rate will show, because every request succeeded. Emit the rung name as a dimension and alert on a shift rather than on a threshold.</p></details>
+
+<details class="faq-item"><summary><span>How should the claim reach the user?</span></summary><p>As a sentence opener the answer layer is required to use, not as a field the model may ignore. "From a cached result about four hours old, the nearest depot is…" reads naturally and carries the caveat where the reader will see it. A structured field alongside the answer is easy to implement and reliably dropped by the time the text is composed.</p></details>
+
+<details class="faq-item"><summary><span>What about partial results from a failed rung?</span></summary><p>Discard them unless the rung was explicitly designed to return partials. A geometry query that timed out halfway has computed something, and that something is a subset of unknown shape — using it produces an answer that is confidently incomplete in a way nothing downstream can detect. If partial results are valuable, make them a rung of their own with a claim that says so.</p></details>
+
+<details class="faq-item"><summary><span>Should the router know about the agent, or only about routes?</span></summary><p>Only about routes. A router that inspects the question and decides which rungs apply has absorbed the intent classifier, and the two then change together for unrelated reasons. Keep the trimming outside — classify the intent, trim the ladder, pass the result in — so the router remains a small piece of machinery that can be tested with fixtures rather than with questions.</p></details>
+
+## Related
+
+- Up to the parent topic: [Fallback Routing for Geospatial Queries](/spatial-llm-architecture-core-concepts/fallback-routing-for-geospatial-queries/)
+- [Deadline Propagation and Timeout Budgets](/spatial-llm-architecture-core-concepts/fallback-routing-for-geospatial-queries/deadline-propagation-and-timeout-budgets/)
+- Related topic: [Error Mapping for Spatial API Calls](/geospatial-prompt-engineering-tool-routing/error-mapping-for-spatial-api-calls/)
+- Related technique: [Retry and Circuit Breaker Patterns for Spatial Services](/geospatial-prompt-engineering-tool-routing/error-mapping-for-spatial-api-calls/retry-and-circuit-breaker-patterns-for-spatial-services/)

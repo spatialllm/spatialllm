@@ -1,111 +1,222 @@
-# Normalizing Mixed CRS Data Before LLM Ingestion
+---
+title: Normalizing Mixed-Frame Data Before LLM Ingestion
+description: Bring geometry from many sources into one frame at ingestion — per-source declarations, batched transforms, repair with provenance, and a rejection queue that gets read.
+slug: normalizing-mixed-crs-data-before-llm-ingestion
+type: howto
+breadcrumb: Normalizing Mixed-Frame Data
+datePublished: 2025-01-15
+dateModified: 2026-08-11
+---
 
-When geospatial datasets enter generative pipelines, coordinate reference system (CRS) heterogeneity is the primary vector for silent degradation. LLMs consume tokenized geometries, bounding boxes, and spatial relationships as structured context. If the underlying coordinate space is inconsistent, tokenization strategies fracture, spatial embeddings diverge, and context windows fill with mathematically incompatible vectors. **Normalizing Mixed CRS Data Before LLM Ingestion** is not a preprocessing luxury; it is a deterministic requirement for reproducible spatial reasoning. This workflow sits at the foundation of [Spatial LLM Architecture & Core Concepts](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/), where coordinate consistency dictates downstream embedding fidelity, attention routing, and query fallback behavior.
+# Normalizing Mixed-Frame Data Before LLM Ingestion
 
-## Failure Modes & Root Causes
+Real ingestion is not one file with one frame. It is fourteen sources, four of which declare a projection correctly, six of which declare one that is technically wrong, three of which declare nothing, and one that changes convention halfway through the year. This guide is about running that reality through a single gate without either rejecting everything or quietly assuming your way to a plausible-looking corpus. It is the working implementation of [coordinate reference system normalization](/spatial-llm-architecture-core-concepts/coordinate-reference-system-normalization/).
 
-The most insidious failure mode occurs when mixed CRS datasets bypass explicit validation before entering tokenization layers. A pipeline ingesting GeoJSON (implicitly WGS84/EPSG:4326 per [RFC 7946](https://datatracker.ietf.org/doc/html/rfc7946)) alongside PostGIS exports in UTM zones like EPSG:32633 will produce coordinate magnitudes that differ by orders of magnitude. Tokenizers interpret these raw floats as distinct semantic spaces, causing spatial embedding models to cluster unrelated geometries. Root causes typically include:
+## When to Use This Approach
 
-- **Implicit CRS assumptions**: `geopandas.read_file()` silently assigns `None` when `.prj` files are missing, causing downstream `to_crs()` calls to fail or default to planar Cartesian math that misaligns with spherical tokenizers.
-- **Datum shift degradation**: `pyproj.Transformer` calls without `always_xy=True` introduce sub-meter drift that compounds across batch transformations, corrupting high-precision spatial queries.
-- **Anti-meridian crossing artifacts**: Geometries spanning ±180° longitude generate bounding boxes with inverted min/max values, triggering NaN propagation in attention layers and breaking spatial indexing structures like R-trees or H3.
-- **Precision bloat**: Raw floating-point coordinates retain 15+ decimal places, inflating token sequences without improving spatial reasoning accuracy. LLMs require bounded precision aligned to geodetic tolerances (typically 6–8 decimal places for meter-scale accuracy).
+Use it at the boundary where external data becomes internal data, and nowhere else. Normalizing repeatedly downstream is wasted work and creates several places where the rules can diverge.
 
-## Validation & Safety Gates
+| Source behaviour | Handling | Recorded as |
+|------------------|----------|-------------|
+| Declares a valid frame | Validate and transform | Declared |
+| Declares a wrong frame consistently | Per-source override, with evidence | Overridden |
+| Declares nothing, frame known | Per-source default, with evidence | Assumed |
+| Declares nothing, frame unknown | Reject | Rejected |
+| Mixes frames within one file | Reject the file, not the rows | Rejected |
 
-Before any transformation, enforce strict metadata auditing. Every geometry batch must pass a CRS resolution gate. If the source declares `None` or `UNKNOWN`, apply a deterministic fallback based on geographic centroid heuristics or explicit pipeline configuration. Implement bounds validation immediately after projection: reject coordinates outside `[-180, 180]` for longitude and `[-90, 90]` for latitude in WGS84, or enforce metric bounds for projected systems. This aligns with established [Coordinate Reference System Normalization](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/coordinate-reference-system-normalization/) protocols that prevent coordinate drift during batch ingestion.
+The distinction between the second and third rows matters operationally. An override says the source is wrong and we know better; an assumption says the source is silent and we have external evidence. Both are declarations someone made, and both should be reviewable — which is why the provenance field records which one applied.
 
-Safety checks must also verify topology preservation. Projection can introduce self-intersections or collapsed rings when crossing zone boundaries. The following validation gate demonstrates explicit error handling, bounds checking, and topology verification:
+<figure class="diagram">
+<svg viewBox="1 38 778 194" role="img" aria-labelledby="nmf-src-t nmf-src-d" xmlns="http://www.w3.org/2000/svg"><title id="nmf-src-t">Where the frame for a geometry actually comes from</title><desc id="nmf-src-d">Four provenance classes — declared by the source, overridden by configuration, assumed from a per-source default, or rejected — each recorded on the stored geometry.</desc><rect x="1" y="38" width="778" height="194" fill="#ffffff"/><rect x="30" y="52" width="170" height="120" rx="8" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="216" y="52" width="170" height="120" rx="8" fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2"/><rect x="402" y="52" width="170" height="120" rx="8" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/><rect x="588" y="52" width="162" height="120" rx="8" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><g fill="#1f2937" font-size="13" text-anchor="middle" font-weight="600"><text x="115" y="84">declared</text><text x="301" y="84">overridden</text><text x="487" y="84">assumed</text><text x="669" y="84">rejected</text></g><g fill="#5b6471" font-size="12" text-anchor="middle"><text x="115" y="112">the source said so</text><text x="115" y="138">and it validated</text><text x="301" y="112">the source is wrong</text><text x="301" y="138">configuration says so</text><text x="487" y="112">the source is silent</text><text x="487" y="138">evidence elsewhere</text><text x="669" y="112">no basis at all</text><text x="669" y="138">queued for a person</text></g><text x="390" y="214" fill="#1f2937" font-size="13" text-anchor="middle">The middle two are human decisions — recording which one applied is what makes them auditable</text></svg>
+<figcaption><b>Three of these four are legitimate.</b> What separates a disciplined pipeline from a hopeful one is not that it never assumes, but that every assumption is attached to a source, carries its evidence, and appears in the record of every geometry it produced.</figcaption>
+</figure>
+
+## Implementation
+
+The ingester resolves a frame per source, transforms in batches for efficiency, and returns both accepted geometries and a rejection list that a person is expected to read.
 
 ```python
-import geopandas as gpd
-import numpy as np
+import logging
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Iterable, Optional, Sequence
+
+from pyproj import CRS, Transformer
+from pyproj.exceptions import CRSError
+from shapely.ops import transform as shapely_transform
 from shapely.validation import make_valid
+from shapely.errors import GEOSException
 
-def validate_geospatial_batch(gdf: gpd.GeoDataFrame, target_crs: str = "EPSG:4326") -> gpd.GeoDataFrame:
-    """
-    Enforce CRS resolution, bounds validation, and topology gates before LLM ingestion.
-    """
-    if gdf.crs is None:
-        raise ValueError("CRS is undefined. Cannot safely normalize without explicit source projection.")
+log = logging.getLogger("mixed_frame_ingest")
 
-    # Gate 1: Topology repair
-    gdf = gdf.copy()
-    gdf["geometry"] = gdf["geometry"].apply(lambda geom: make_valid(geom) if geom else None)
-    invalid_mask = gdf["geometry"].isna() | gdf["geometry"].is_empty
-    if invalid_mask.any():
-        gdf = gdf[~invalid_mask]
+CANONICAL_EPSG = 4326
 
-    # Gate 2: CRS transformation
-    gdf = gdf.to_crs(target_crs)
 
-    # Gate 3: Coordinate bounds validation (WGS84 assumed for LLM tokenization)
-    bounds = gdf.total_bounds
-    if not (-180 <= bounds[0] and bounds[2] <= 180 and -90 <= bounds[1] and bounds[3] <= 90):
-        raise ValueError(f"Coordinates exceed WGS84 bounds: {bounds}. Anti-meridian crossing or projection error detected.")
+@dataclass(frozen=True)
+class SourceRule:
+    source_id: str
+    override_epsg: Optional[int] = None     # the source declares wrongly
+    default_epsg: Optional[int] = None      # the source declares nothing
+    evidence: str = ""                      # why we believe either of the above
 
-    # Gate 4: Precision truncation (prevents token bloat)
-    import shapely
-    gdf["geometry"] = gdf["geometry"].apply(
-        lambda geom: shapely.set_precision(geom, 1e-7)  # ~1 cm precision
-    )
 
-    return gdf
+@dataclass(frozen=True)
+class Accepted:
+    geometry: object
+    source_epsg: int
+    provenance: str                          # declared | overridden | assumed
+    repaired: bool
+    evidence: str
+
+
+@dataclass(frozen=True)
+class Rejected:
+    source_id: str
+    identifier: str
+    reason: str
+
+
+def resolve_frame(declared: Optional[int], rule: SourceRule) -> tuple[Optional[int], str, str]:
+    """Return (epsg, provenance, evidence). None means reject."""
+    if rule.override_epsg is not None:
+        return rule.override_epsg, "overridden", rule.evidence
+    if declared is not None:
+        return declared, "declared", ""
+    if rule.default_epsg is not None:
+        return rule.default_epsg, "assumed", rule.evidence
+    return None, "rejected", "source declares no frame and no default is configured"
 ```
 
-## Deterministic Transformation Pipeline
-
-Once validation passes, the transformation step must be stateless, reproducible, and grid-aware. Relying on default PROJ transformations without explicit datum shift parameters introduces non-deterministic behavior across environments. Use `pyproj` directly for batch operations with explicit axis ordering:
+Batching the transforms matters more than it looks on a large ingest. Building a transformer is expensive relative to using one, and a naive loop that constructs a fresh transformer per geometry can spend most of its time on setup.
 
 ```python
-import pyproj
-from pyproj import Transformer
-from shapely.ops import transform
+def ingest(records: Iterable[dict], rules: dict[str, SourceRule]
+           ) -> tuple[list[Accepted], list[Rejected]]:
+    """Normalize a mixed batch. Returns accepted geometries and an explicit rejection list."""
+    accepted: list[Accepted] = []
+    rejected: list[Rejected] = []
+    by_frame: dict[tuple[int, str, str], list[dict]] = defaultdict(list)
 
-def deterministic_transform(gdf: gpd.GeoDataFrame, target_crs: str = "EPSG:4326") -> gpd.GeoDataFrame:
-    """
-    Apply deterministic CRS transformation with explicit axis ordering.
-    Works for all geometry types (points, lines, polygons).
-    """
-    if gdf.crs is None:
-        raise ValueError("Source CRS is undefined. Cannot transform.")
+    for rec in records:
+        rule = rules.get(rec["source_id"], SourceRule(rec["source_id"]))
+        epsg, provenance, evidence = resolve_frame(rec.get("declared_epsg"), rule)
+        if epsg is None:
+            rejected.append(Rejected(rec["source_id"], rec["id"], evidence))
+            continue
+        try:
+            CRS.from_epsg(epsg)
+        except CRSError as exc:
+            rejected.append(Rejected(rec["source_id"], rec["id"],
+                                     f"EPSG:{epsg} will not construct: {exc}"))
+            continue
+        by_frame[(epsg, provenance, evidence)].append(rec)
 
+    target = CRS.from_epsg(CANONICAL_EPSG)
+    for (epsg, provenance, evidence), group in by_frame.items():
+        source = CRS.from_epsg(epsg)
+        tf = None if source.equals(target) else Transformer.from_crs(
+            source, target, always_xy=True)
+        for rec in group:
+            geom, repaired = _repair(rec["geometry"])
+            if geom is None:
+                rejected.append(Rejected(rec["source_id"], rec["id"],
+                                         "geometry could not be repaired"))
+                continue
+            try:
+                moved = geom if tf is None else shapely_transform(tf.transform, geom)
+            except Exception as exc:
+                rejected.append(Rejected(rec["source_id"], rec["id"],
+                                         f"transform from EPSG:{epsg} failed: {exc}"))
+                continue
+            accepted.append(Accepted(moved, epsg, provenance, repaired, evidence))
+
+    log.info("ingest: %d accepted, %d rejected across %d frame group(s)",
+             len(accepted), len(rejected), len(by_frame))
+    return accepted, rejected
+
+
+def _repair(geom):
+    if geom is None or geom.is_empty:
+        return None, False
+    if geom.is_valid:
+        return geom, False
     try:
-        transformer = Transformer.from_crs(
-            gdf.crs, target_crs, always_xy=True, accuracy=0.01
-        )
-        gdf = gdf.copy()
-        gdf.geometry = gdf.geometry.apply(
-            lambda geom: transform(transformer.transform, geom) if geom and not geom.is_empty else geom
-        )
-        gdf = gdf.set_crs(target_crs, allow_override=True)
-    except pyproj.exceptions.ProjError as e:
-        raise RuntimeError(f"CRS transformation failed: {e}. Verify grid files or fallback to centroid approximation.")
-
-    return gdf
+        fixed = make_valid(geom)
+    except GEOSException:
+        return None, False
+    return (fixed, True) if not fixed.is_empty else (None, False)
 ```
 
-For polygon/line geometries, `geopandas.to_crs()` is typically the most efficient path; the function above is useful when you need custom per-geometry handling or logging. Always cache transformation grids via `PROJ_NETWORK=ON` or local CDN mirrors to prevent sub-meter drift in distributed training environments.
+The rejection list is a return value rather than a log line because it needs to reach a person. A pipeline that logs rejections and returns only successes will run for months with a fifth of its input silently discarded, and the symptom — "the corpus seems thin in the north" — arrives long after the cause.
 
-## Tokenization & Embedding Alignment
+<figure class="diagram">
+<svg viewBox="16 24 734 208" role="img" aria-labelledby="nmf-batch-t nmf-batch-d" xmlns="http://www.w3.org/2000/svg"><title id="nmf-batch-t">Per-geometry transformers against grouped transforms</title><desc id="nmf-batch-d">Constructing a transformer for every geometry dominates ingest time, while grouping records by source frame builds one transformer per frame and spends the remaining time on the geometry itself.</desc><rect x="16" y="24" width="734" height="208" fill="#ffffff"/><text x="30" y="62" fill="#b3324f" font-size="13" font-weight="600">per geometry</text><rect x="190" y="38" width="440" height="42" rx="5" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><rect x="636" y="38" width="100" height="42" rx="5" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><text x="410" y="64" fill="#1f2937" font-size="12" text-anchor="middle">building transformers</text><text x="686" y="64" fill="#1f2937" font-size="12" text-anchor="middle">real work</text><text x="30" y="152" fill="#12805c" font-size="13" font-weight="600">grouped</text><rect x="190" y="128" width="60" height="42" rx="5" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><rect x="256" y="128" width="480" height="42" rx="5" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><text x="220" y="154" fill="#1f2937" font-size="11.5" text-anchor="middle">setup</text><text x="496" y="154" fill="#1f2937" font-size="12" text-anchor="middle">real work</text><text x="390" y="214" fill="#1f2937" font-size="13" text-anchor="middle">Same transformations, same results — one transformer per frame instead of per record</text></svg>
+<figcaption><b>The grouping is not a micro-optimisation.</b> On a corpus with a handful of source frames it turns an ingest that takes hours into one that takes minutes, which is the difference between reprocessing being routine and being avoided.</figcaption>
+</figure>
 
-Normalized coordinates directly dictate how spatial features map into token space. When CRS heterogeneity is resolved, bounding boxes, centroid vectors, and vertex sequences align with the tokenizer's expected numerical distribution. This prevents spatial embedding models from learning artificial clusters based on projection artifacts rather than true geographic proximity.
+## Validation & Testing
 
-Key alignment strategies:
-1. **Quantized Bounding Box Tokens**: Convert normalized WGS84 bounds into fixed-length integer sequences using geohash or discrete global grid systems (e.g., H3, S2). This compresses spatial context while preserving topological adjacency.
-2. **Vertex Sequence Padding**: Standardize polygon vertex counts to fixed lengths. Pad or truncate after normalization to ensure consistent attention mask lengths across the batch.
-3. **Relative Offset Encoding**: Instead of absolute coordinates, encode deltas from a regional centroid. This reduces floating-point variance and improves gradient stability in spatial fine-tuning.
+```python
+def test_rejections_are_returned_not_only_logged():
+    records = [{"source_id": "unknown", "id": "a", "geometry": POINT, "declared_epsg": None}]
+    accepted, rejected = ingest(records, rules={})
+    assert not accepted and len(rejected) == 1
+    assert "no frame" in rejected[0].reason
 
-These strategies feed directly into context window optimization, ensuring that spatial tokens do not dominate the prompt budget while maintaining query resolution.
 
-## Pipeline Integration & Next Steps
+def test_provenance_distinguishes_assumed_from_declared():
+    rules = {"silent": SourceRule("silent", default_epsg=27700, evidence="agency confirmed 2024")}
+    records = [
+        {"source_id": "silent", "id": "a", "geometry": POINT, "declared_epsg": None},
+        {"source_id": "silent", "id": "b", "geometry": POINT, "declared_epsg": 4326},
+    ]
+    accepted, _ = ingest(records, rules)
+    assert {a.provenance for a in accepted} == {"assumed", "declared"}
 
-Integrating CRS normalization into production LLM pipelines requires deterministic CI/CD gates, monitoring hooks, and explicit fallback routing. Follow these actionable next steps:
 
-1. **Pre-Ingestion Hook**: Attach the validation gate as a mandatory step in your data ingestion DAG (Airflow, Dagster, or Prefect). Reject batches that fail bounds or topology checks before they reach the embedding layer.
-2. **Drift Monitoring**: Log CRS metadata, transformation accuracy, and precision truncation rates. Set alerts for batches where more than 2% of geometries require topology repair or exceed WGS84 bounds.
-3. **Fallback Routing**: When normalization fails or CRS metadata is irrecoverable, route the batch to a fallback handler that extracts centroid coordinates, applies a conservative buffer, and tags the payload with `spatial_confidence: low`. This prevents silent degradation while preserving pipeline throughput.
-4. **Embedding Validation**: After tokenization, run a cosine similarity sanity check against a known geographic baseline. If spatial embeddings diverge by more than 15% from the normalized baseline, trigger a re-ingestion with stricter precision thresholds.
-5. **Documentation & Versioning**: Pin `pyproj` and `geopandas` versions in your environment. CRS transformation behavior changes across PROJ releases; lock your stack and document the exact grid files used for reproducibility.
+def test_one_transformer_per_frame_group(monkeypatch):
+    built = []
+    original = Transformer.from_crs
+    monkeypatch.setattr(Transformer, "from_crs",
+                        lambda *a, **k: (built.append(a) or original(*a, **k)))
+    ingest(HUNDRED_RECORDS_TWO_FRAMES, rules={})
+    assert len(built) <= 2
+```
 
-By enforcing strict CRS normalization, you eliminate the silent coordinate drift that corrupts spatial reasoning, tokenization efficiency, and attention routing. Treat coordinate consistency as a first-class pipeline constraint, and your geospatial LLM workflows will scale deterministically across heterogeneous data sources.
+The third test guards a performance property with a correctness-shaped assertion, which is the only way this kind of regression gets caught. Nothing about a per-geometry transformer produces wrong output; it simply makes reprocessing expensive enough that people stop doing it.
+
+## Gotchas & Edge Cases
+
+**An override applied to a source that later fixes itself.** The upstream export starts declaring correctly, the override keeps forcing the old value, and the geometry is now wrong in the opposite direction. Review overrides on a schedule, and log when an override contradicts a declaration rather than silently winning.
+
+**Mixed frames within one file.** Rejecting the file rather than the offending rows is deliberate: a file with two conventions usually means a concatenation, and the rows you can identify as wrong are rarely all of them.
+
+**Repair applied before the frame is known.** Repairing geometry in a frame that later turns out to be wrong bakes the repair into the wrong coordinates. Resolve the frame first, repair second, transform third — the order in the code is the order that survives contact with bad data.
+
+<figure class="diagram">
+<svg viewBox="3 24 753 208" role="img" aria-labelledby="nmf-order-t nmf-order-d" xmlns="http://www.w3.org/2000/svg"><title id="nmf-order-t">Why the order of resolve, repair and transform matters</title><desc id="nmf-order-d">Repairing before the frame is known bakes a repair into coordinates that are about to move; resolving first, repairing second and transforming third keeps each step operating on data it can interpret.</desc><rect x="3" y="24" width="753" height="208" fill="#ffffff"/><text x="30" y="62" fill="#12805c" font-size="13" font-weight="600">correct</text><rect x="170" y="38" width="170" height="42" rx="5" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="356" y="38" width="170" height="42" rx="5" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="542" y="38" width="170" height="42" rx="5" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><g fill="#1f2937" font-size="12" text-anchor="middle"><text x="255" y="64">resolve the frame</text><text x="441" y="64">repair</text><text x="627" y="64">transform</text></g><text x="30" y="152" fill="#b3324f" font-size="13" font-weight="600">wrong</text><rect x="170" y="128" width="170" height="42" rx="5" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><rect x="356" y="128" width="170" height="42" rx="5" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><rect x="542" y="128" width="170" height="42" rx="5" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><g fill="#1f2937" font-size="12" text-anchor="middle"><text x="255" y="154">repair</text><text x="441" y="154">resolve the frame</text><text x="627" y="154">transform</text></g><text x="380" y="214" fill="#1f2937" font-size="13" text-anchor="middle">A repair applied in the wrong frame is a correction to coordinates that were about to move</text></svg>
+<figcaption><b>Order is not a matter of taste here.</b> Repair changes vertex positions, and vertex positions only mean something once the frame is known — so a repair performed first is a decision made with the wrong information.</figcaption>
+</figure>
+
+**Rejections that nobody owns.** A queue with no reader is a discard with extra steps. Route rejections to whoever owns the source, with the source identifier in the message, and track the queue depth as a monitored value.
+
+**Evidence fields left empty.** An assumption with no recorded evidence is indistinguishable from a guess six months later. Make the evidence string required on any rule that overrides or defaults, even if the evidence is only "confirmed by the data owner on this date".
+
+## Frequently Asked Questions
+
+<details class="faq-item"><summary><span>Should a source override be per file or per source?</span></summary><p>Per source, with the file identifier recorded on the accepted geometry so a per-file exception can be traced later. Per-file overrides multiply quickly and end up as a directory of one-off rules nobody can reason about; a per-source rule with a dated evidence note stays reviewable. Where one file genuinely differs, that is usually a sign the source has changed its convention, which is worth handling as a change rather than as an exception.</p></details>
+
+<details class="faq-item"><summary><span>How should the rejection queue be sized and monitored?</span></summary><p>Track depth and age, and alert on age rather than depth. A queue with two hundred items that are all from this morning is a busy ingest; a queue with five items that have been there for three weeks is an ownership problem. Aging is also the signal that distinguishes a genuine data issue from a rule that needs adding — items that sit are usually items nobody knows what to do with.</p></details>
+
+<details class="faq-item"><summary><span>Is it worth normalizing during a bulk backfill differently from streaming ingest?</span></summary><p>The rules should be identical; only the batching changes. A backfill can group aggressively across a whole file, while a streaming ingest groups within a window. What must not differ is the resolution logic — two code paths that decide frames differently will produce a corpus whose geometry depends on when it arrived, which is the hardest kind of inconsistency to diagnose because nothing about the data records it.</p></details>
+
+<details class="faq-item"><summary><span>What should happen when a transform succeeds but produces implausible output?</span></summary><p>Treat it as a rejection with a distinct reason. A transform that lands geometry in the wrong hemisphere has technically succeeded and is certainly wrong, and the round-trip check described in the parent topic is what catches it. Recording it as its own rejection class rather than as a generic failure is what lets you see, later, that one source accounts for all of them.</p></details>
+
+<details class="faq-item"><summary><span>Should accepted geometry keep its original coordinates as well?</span></summary><p>Keep the source frame code and the transformation note, which together let the original be reconstructed, rather than storing both geometries. Duplicating the geometry doubles the storage for a value that is almost never read, and the two copies drift the moment anything edits one of them. The exception is a corpus where the original is legally the record of truth, in which case store the original and treat the canonical copy as derived.</p></details>
+
+## Related
+
+- Up to the parent topic: [Coordinate Reference System Normalization](/spatial-llm-architecture-core-concepts/coordinate-reference-system-normalization/)
+- [Choosing a Canonical Frame for Spatial LLM Pipelines](/spatial-llm-architecture-core-concepts/coordinate-reference-system-normalization/choosing-a-canonical-crs-for-llm-pipelines/)
+- [Detecting Axis-Order Swaps in Coordinate Input](/spatial-llm-architecture-core-concepts/coordinate-reference-system-normalization/detecting-axis-order-swaps-in-coordinate-input/)
+- Related topic: [Retrieval-Augmented CRS Resolution](/geospatial-rag-pipelines/retrieval-augmented-crs-resolution/)

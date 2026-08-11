@@ -1,327 +1,261 @@
 ---
 layout: overview.njk
 order: 1
+navLabel: Architecture
 icon: architecture
+title: Spatial LLM Architecture and Core Concepts
+description: The representation, resolution, reasoning and evaluation layers a spatial language system needs — and the failure each one prevents when it is built deliberately.
+slug: spatial-llm-architecture-core-concepts
+type: overview
+breadcrumb: Architecture and Core Concepts
+datePublished: 2025-01-07
+dateModified: 2026-08-11
 ---
 
-# Spatial LLM Architecture & Core Concepts
+# Spatial LLM Architecture and Core Concepts
 
-Integrating large language models into geospatial workflows requires a validation-first design where geometric integrity, coordinate system consistency, and deterministic fallbacks govern every stage of the inference pipeline. Unlike general NLP systems, spatial LLMs must reconcile continuous coordinate spaces, topological constraints, and multi-modal raster/vector representations within finite context windows. The sections that follow establish the engineering patterns required to deploy reliable spatial AI agents across enterprise platforms and cloud-native GIS infrastructure.
+A language model reasoning about places fails differently from one reasoning about text. It does not produce nonsense; it produces fluent, confident answers that are displaced by a datum shift, measured in square degrees, or attached to a town with the same name in another country. Every one of those failures is silent — the output is well-formed, the pipeline reports success, and nothing raises. This section is the set of layers that make those failures impossible rather than unlikely.
+
+The layers are not optional extras on top of a working system; they are what makes the system work. A geometry must arrive in a declared frame before it can be tokenized, be tokenized before it can fit a context window, be positioned by a lookup rather than by recall before any relation about it can be checked, and be measured against a case set before any of it can be claimed to have improved. What follows is each layer, the specific failure it prevents, and the standard it has to meet in production.
 
 <figure class="diagram">
-<svg viewBox="0 0 860 300" role="img" aria-labelledby="slm-t slm-d" xmlns="http://www.w3.org/2000/svg">
-  <title id="slm-t">Spatial LLM architecture pipeline</title>
-  <desc id="slm-d">Five core stages — CRS normalization, geometry tokenization, spatial embedding, context-window assembly, and tool-routed inference — run in sequence to build a unified spatial reasoning layer that powers vector-raster fusion, fallback routing, and context optimization.</desc>
-  <defs>
-    <marker id="slm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="#5b6471"/>
-    </marker>
-  </defs>
-  <g fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2">
-    <rect x="15" y="55" width="150" height="80" rx="8"/>
-    <rect x="183" y="55" width="150" height="80" rx="8"/>
-    <rect x="351" y="55" width="150" height="80" rx="8"/>
-    <rect x="519" y="55" width="150" height="80" rx="8"/>
-    <rect x="687" y="55" width="150" height="80" rx="8"/>
-  </g>
-  <g stroke="#5b6471" stroke-width="2" marker-end="url(#slm-arrow)">
-    <line x1="166" y1="95" x2="181" y2="95"/>
-    <line x1="334" y1="95" x2="349" y2="95"/>
-    <line x1="502" y1="95" x2="517" y2="95"/>
-    <line x1="670" y1="95" x2="685" y2="95"/>
-  </g>
-  <g stroke="#5b6471" stroke-width="2" marker-end="url(#slm-arrow)">
-    <line x1="90" y1="137" x2="90" y2="202"/>
-    <line x1="258" y1="137" x2="258" y2="202"/>
-    <line x1="426" y1="137" x2="426" y2="202"/>
-    <line x1="594" y1="137" x2="594" y2="202"/>
-    <line x1="762" y1="137" x2="762" y2="202"/>
-  </g>
-  <rect x="15" y="205" width="822" height="58" rx="8" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/>
-  <g fill="#1f2937" font-size="13" text-anchor="middle">
-    <text x="90" y="90"><tspan x="90" dy="0">Ingest &amp;</tspan><tspan x="90" dy="16">CRS normalize</tspan></text>
-    <text x="258" y="90"><tspan x="258" dy="0">Geometry</tspan><tspan x="258" dy="16">tokenization</tspan></text>
-    <text x="426" y="90"><tspan x="426" dy="0">Spatial</tspan><tspan x="426" dy="16">embedding</tspan></text>
-    <text x="594" y="90"><tspan x="594" dy="0">Context</tspan><tspan x="594" dy="16">assembly</tspan></text>
-    <text x="762" y="90"><tspan x="762" dy="0">Tool routing</tspan><tspan x="762" dy="16">&amp; inference</tspan></text>
-  </g>
-  <text x="426" y="240" fill="#1f2937" font-size="15" font-weight="600" text-anchor="middle">Unified spatial reasoning layer</text>
-  <text x="426" y="287" fill="#5b6471" font-size="12" text-anchor="middle">Downstream: vector-raster fusion · fallback routing · context optimization</text>
-</svg>
+<svg viewBox="0 0 860 330" role="img" aria-labelledby="slm-arch-t slm-arch-d" xmlns="http://www.w3.org/2000/svg"><title id="slm-arch-t">The layers of a spatial language system</title><desc id="slm-arch-d">Ingestion normalises frames and repairs geometry, representation tokenizes and budgets it, resolution turns names into records, reasoning verifies relations, and evaluation gates the whole thing before release.</desc><rect x="0" y="0" width="860" height="330" fill="#ffffff"/><text x="430" y="34" fill="#5b6471" font-size="13" text-anchor="middle">Each layer depends on the one before it and prevents one specific silent failure</text><g fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2"><rect x="24" y="52" width="190" height="80" rx="8"/><rect x="234" y="52" width="190" height="80" rx="8"/><rect x="444" y="52" width="190" height="80" rx="8"/><rect x="654" y="52" width="182" height="80" rx="8"/></g><g fill="#1f2937" font-size="13" text-anchor="middle" font-weight="600"><text x="119" y="82">normalize</text><text x="329" y="82">represent</text><text x="539" y="82">resolve</text><text x="745" y="82">reason</text></g><g fill="#5b6471" font-size="12" text-anchor="middle"><text x="119" y="106">one declared frame</text><text x="329" y="106">tokens and budgets</text><text x="539" y="106">names to records</text><text x="745" y="106">relations, checked</text><text x="119" y="124">no silent assumption</text><text x="329" y="124">no truncated ring</text><text x="539" y="124">no recalled coordinate</text><text x="745" y="124">no composed claim</text></g><g stroke="#5b6471" stroke-width="2" marker-end="url(#slm-arch-a)"><line x1="216" y1="92" x2="230" y2="92"/><line x1="426" y1="92" x2="440" y2="92"/><line x1="636" y1="92" x2="650" y2="92"/></g><defs><marker id="slm-arch-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5b6471"/></marker></defs><rect x="24" y="162" width="812" height="66" rx="8" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><text x="430" y="190" fill="#1f2937" font-size="13.5" text-anchor="middle" font-weight="600">evaluation — measures every layer, gates every release</text><text x="430" y="214" fill="#5b6471" font-size="12" text-anchor="middle">placement, plausibility, relations and refusal, each on its own axis</text><rect x="24" y="252" width="812" height="60" rx="8" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/><text x="430" y="278" fill="#1f2937" font-size="13" text-anchor="middle" font-weight="600">fallback routing — what happens when any of it is unavailable</text><text x="430" y="300" fill="#5b6471" font-size="12" text-anchor="middle">a smaller claim, stated, rather than a silent approximation</text></svg>
+<figcaption><b>Two layers run underneath rather than alongside.</b> Evaluation measures all four upper layers and gates releases on them; fallback routing decides what each one does when its dependencies are missing. Neither is a stage in the pipeline, and both are what make the pipeline trustworthy.</figcaption>
 </figure>
 
-## Validation-First Data Ingestion & CRS Enforcement
+## Normalizing the Reference Frame Before Anything Else
 
-Spatial LLMs fail silently when fed malformed geometries or inconsistent projections. The ingestion layer must enforce strict validation gates before data reaches the reasoning engine. Coordinate reference system (CRS) normalization is the primary failure point in cross-source spatial pipelines. Production systems should implement automated CRS detection, transformation to a canonical projection, and topology validation prior to tokenization. Relying on implicit coordinate assumptions violates [OGC interoperability standards](https://www.ogc.org/standards) and guarantees downstream hallucination or geometric drift.
-
-```python
-import geopandas as gpd
-import logging
-from shapely.validation import make_valid
-from shapely.geometry.base import BaseGeometry
-from pyproj import CRS
-from typing import Optional
-
-logger = logging.getLogger(__name__)
-
-def validate_and_normalize_spatial_input(
-    gdf: gpd.GeoDataFrame,
-    target_epsg: int = 4326
-) -> gpd.GeoDataFrame:
-    """Production-grade CRS normalization and topology validation."""
-    if gdf.empty:
-        raise ValueError("Input GeoDataFrame is empty.")
-
-    # 1. CRS Enforcement
-    if gdf.crs is None:
-        raise ValueError("Input GeoDataFrame lacks CRS definition. Rejecting ambiguous geometry.")
-
-    target_crs = CRS.from_epsg(target_epsg)
-    if not gdf.crs.equals(target_crs):
-        logger.info(f"Transforming CRS from {gdf.crs.to_epsg()} to {target_epsg}")
-        gdf = gdf.to_crs(target_crs)
-
-    # 2. Topology Validation & Repair
-    invalid_mask = ~gdf.geometry.is_valid
-    if invalid_mask.any():
-        logger.warning(f"Repairing {invalid_mask.sum()} invalid geometries via make_valid()")
-        gdf = gdf.copy()
-        gdf.loc[invalid_mask, "geometry"] = gdf.loc[invalid_mask, "geometry"].apply(make_valid)
-
-    # 3. Null & Empty Geometry Sanitization
-    gdf = gdf.dropna(subset=["geometry"])
-    empty_mask = gdf.geometry.is_empty
-    if empty_mask.any():
-        logger.info(f"Dropping {empty_mask.sum()} empty geometries")
-        gdf = gdf[~empty_mask]
-
-    if gdf.empty:
-        raise RuntimeError("Validation pipeline resulted in zero valid geometries.")
-
-    return gdf.reset_index(drop=True)
-```
-
-Topology validation extends beyond simple validity checks. Production pipelines should integrate PostGIS `ST_IsValidReason`, `ST_SnapToGrid`, and `ST_MakeValid` at the database layer to prevent floating-point drift from propagating into LLM prompts. Comprehensive strategies for handling projection drift and datum transformations are detailed in [Coordinate Reference System Normalization](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/coordinate-reference-system-normalization/).
-
-## Geometry Representation & Tokenization Strategies
-
-LLMs operate on discrete token sequences, while spatial data exists in continuous, high-precision coordinate spaces. Bridging this gap requires deliberate geometry tokenization that preserves topological relationships without exhausting context budgets. Raw coordinate serialization (e.g., dumping raw WKT or GeoJSON) frequently triggers token overflow or precision degradation. Engineering teams must implement coordinate quantization, bounding-box normalization, and hierarchical spatial indexing before prompt injection.
+Two datasets describing the same street can disagree by two hundred metres and both be correct, because they were recorded against different realisations of the ground. The ingestion gate resolves that before anything downstream can be misled: every geometry arrives in one declared frame, validated, with its transformation recorded.
 
 ```python
-import json
-from shapely.geometry import mapping
-from shapely.geometry.base import BaseGeometry
-
-def tokenize_geometry_for_llm(
-    geom: BaseGeometry,
-    precision: int = 5,
-    max_coords: int = 500
-) -> str:
-    """Converts geometry to a token-efficient, precision-controlled string representation."""
-    if geom.is_empty:
-        raise ValueError("Cannot tokenize empty geometry.")
-
-    def quantize_coords(coord):
-        return tuple(round(c, precision) for c in coord)
-
-    geojson_dict = mapping(geom)
-
-    def process_geojson(obj):
-        if isinstance(obj, list):
-            if len(obj) >= 2 and all(isinstance(x, (int, float)) for x in obj[:2]):
-                return list(quantize_coords(obj))
-            return [process_geojson(item) for item in obj]
-        elif isinstance(obj, dict):
-            return {k: process_geojson(v) for k, v in obj.items()}
-        return obj
-
-    cleaned_geojson = process_geojson(geojson_dict)
-    coords_str = json.dumps(cleaned_geojson.get("coordinates", []), separators=(",", ":"))
-
-    # Context window safeguard
-    if len(coords_str) > max_coords * 10:
-        raise OverflowError("Geometry exceeds token budget. Apply spatial simplification or tiling.")
-
-    return f"<geom>{coords_str}</geom>"
+def normalize(geom, declared_epsg, target_epsg=4326):
+    """One entry point; either a fully described result or an explicit rejection."""
+    source = require_frame(declared_epsg)          # refuses; never assumes
+    geom, repaired = repair(geom)                  # deterministic, and recorded
+    if source.is_geographic and axis_order_suspect(geom, source):
+        raise CRSRejected("coordinates appear axis-swapped; correct the source")
+    transformer, note = build_transformer(source, CRS.from_epsg(target_epsg))
+    return Normalized(shapely_transform(transformer.transform, geom),
+                      declared_epsg, target_epsg, note, repaired)
 ```
 
-Effective tokenization requires balancing spatial fidelity with model constraints. Strategies such as grid-based coordinate snapping, relative offset encoding, and multi-scale representation prevent context window saturation while maintaining query accuracy. Deeper architectural patterns are covered in [Geometry Tokenization Strategies](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/geometry-tokenization-strategies/) and [Context Window Optimization for Maps](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/context-window-optimization-for-maps/).
+The refusal is the load-bearing part. Treating undeclared coordinates as geographic because they look like degrees is the most expensive habit in spatial software: rejection produces an error someone fixes in an hour, while assumption produces answers wrong by a datum shift for as long as the system runs. The full gate, including per-source overrides for the sources that declare wrongly, is in [coordinate reference system normalization](/spatial-llm-architecture-core-concepts/coordinate-reference-system-normalization/).
 
-## Spatial Embedding & Semantic Alignment
+Storing in one frame does not mean measuring in it. Areas need an equal-area projection and distances need one centred on what is being measured, chosen per operation rather than baked into storage — the split argued in [choosing a canonical frame for spatial LLM pipelines](/spatial-llm-architecture-core-concepts/coordinate-reference-system-normalization/choosing-a-canonical-crs-for-llm-pipelines/). Calling an area accessor on geographic coordinates returns square degrees, a unit whose relationship to square metres varies with latitude, and it is the single most common measurement error in spatial code.
 
-Spatial LLMs require cross-modal semantic grounding where geographic features map to latent vector spaces. Traditional text embeddings ignore spatial proximity, topological adjacency, and directional relationships. Production systems deploy spatial-aware encoders that fuse coordinate metadata, attribute semantics, and relational topology into unified embedding vectors. These embeddings power vector similarity search, spatial clustering, and cross-modal retrieval.
+## Turning Geometry Into Tokens Without Losing It
+
+A model reads tokens; a polygon is a list of high-precision numbers. How that conversion is done determines both what fraction of the context one feature consumes and how much of its meaning survives.
 
 ```python
-import numpy as np
-from typing import List, Dict, Any
-from sklearn.preprocessing import StandardScaler
-
-def generate_spatial_embeddings(
-    features: List[Dict[str, Any]],
-    model: Any,
-    normalize: bool = True
-) -> np.ndarray:
-    """Generates and validates spatial embeddings with deterministic fallbacks."""
-    if not features:
-        raise ValueError("Feature list is empty. Cannot generate embeddings.")
-
-    raw_vectors = []
-    for feat in features:
-        if "geometry" not in feat or "text_description" not in feat:
-            raise KeyError("Each feature must contain 'geometry' and 'text_description'.")
-        vec = model.encode(feat["text_description"])
-        raw_vectors.append(vec)
-
-    embeddings = np.array(raw_vectors)
-
-    if normalize:
-        scaler = StandardScaler()
-        embeddings = scaler.fit_transform(embeddings)
-
-    if np.isnan(embeddings).any() or np.isinf(embeddings).any():
-        raise RuntimeError("Embedding pipeline produced NaN/Inf values. Check model weights or input encoding.")
-
-    return embeddings
+def tokenize_within_budget(geom, budget, count_tokens, decimals=5):
+    """Reduce along a defined ladder. Never truncates the token stream."""
+    for rung, text in (("full", render(geom, decimals)),
+                       ("fewer_decimals", render(geom, decimals - 2)),
+                       ("simplified", render(simplify_safely(geom, 25.0), decimals - 2))):
+        if count_tokens(text) <= budget:
+            return Tokenized(text, rung)
+    return Tokenized(extent_of(geom), "extent_only")     # a stated loss, not a cut
 ```
 
-Embedding pipelines must be monitored for dimensional collapse and semantic drift. Indexing strategies like HNSW or IVF-PQ require careful tuning to preserve spatial locality in high-dimensional space. Implementation details for training and deploying geospatial-aware encoders are covered in [Spatial Embedding Models](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/spatial-embedding-models/).
+Three decisions do most of the work. Precision is a policy chosen from the questions rather than inherited from the exporter — five decimal places is roughly a metre, and coordinates arrive with twelve. Representation is chosen once for the corpus, because the compact, structured and cell forms differ by a factor of six in cost and completely in what they preserve. And the budget degrades along a ladder rather than truncating, because a cut coordinate list is not a coarser geometry but a parse error. See [geometry tokenization strategies](/spatial-llm-architecture-core-concepts/geometry-tokenization-strategies/) and, for the arithmetic, [coordinate precision versus token cost](/spatial-llm-architecture-core-concepts/geometry-tokenization-strategies/coordinate-precision-versus-token-cost/).
 
-## Deterministic Fallbacks & Agent Routing
+Vertex reduction deserves particular care because it is the most effective saving and the easiest way to produce a self-intersecting ring or a sliver between two parcels that used to share a boundary. Simplify with a topology-preserving algorithm, in a metric frame, and validate afterwards.
 
-Probabilistic reasoning is inherently unsuitable for high-stakes spatial operations like cadastral boundary resolution, emergency routing, or regulatory compliance checks. Spatial AI agents must implement deterministic fallback routing that intercepts low-confidence LLM outputs and delegates execution to verified GIS toolchains. This circuit-breaker architecture ensures that hallucinated coordinates, invalid topological relationships, or mathematically impossible distances never reach production endpoints.
+## Fitting a Map Into a Context Window
+
+A map view holds thousands of features and a context window holds a few dozen once the answer allowance and the instructions are subtracted. What survives that reduction, and whether the model is told what did not, decides whether an answer about counts or coverage is trustworthy.
 
 ```python
-import logging
-from dataclasses import dataclass, field
-from typing import Callable, Any
-
-logger = logging.getLogger(__name__)
-
-@dataclass
-class SpatialAgentResult:
-    source: str
-    confidence: float
-    payload: Any
-    fallback_triggered: bool = False
-
-def route_geospatial_query(
-    query: str,
-    llm_predictor: Callable,
-    deterministic_executor: Callable,
-    confidence_threshold: float = 0.85
-) -> SpatialAgentResult:
-    """Routes spatial queries to LLM or deterministic GIS tools based on confidence metrics."""
-    try:
-        llm_output = llm_predictor(query)
-        confidence = llm_output.get("confidence_score", 0.0)
-
-        # Validate geometric output if present
-        if "geometry" in llm_output:
-            from shapely.geometry import shape
-            try:
-                shape(llm_output["geometry"])
-            except Exception:
-                confidence = max(0.0, confidence - 0.4)
-
-        if confidence >= confidence_threshold:
-            return SpatialAgentResult(
-                source="llm_probabilistic",
-                confidence=confidence,
-                payload=llm_output
-            )
-        else:
-            logger.warning(f"Confidence {confidence:.2f} below threshold. Triggering deterministic fallback.")
-            fallback_payload = deterministic_executor(query)
-            return SpatialAgentResult(
-                source="deterministic_gis",
-                confidence=1.0,
-                payload=fallback_payload,
-                fallback_triggered=True
-            )
-
-    except Exception as e:
-        logger.error(f"Agent routing failed. Forcing deterministic execution: {e}")
-        return SpatialAgentResult(
-            source="deterministic_gis",
-            confidence=1.0,
-            payload=deterministic_executor(query),
-            fallback_triggered=True
-        )
+def feature_block(features, rule, excluded_summary, render):
+    """Features plus an explicit statement of the selection and the omission."""
+    lines = [f"Features shown: {rule}."]
+    if excluded_summary:
+        lines.append(excluded_summary)
+    lines.extend(render(f) for f in features)
+    return "\n".join(lines)
 ```
 
-Fallback routing requires strict interface contracts between LLM tool-calling frameworks and traditional GIS libraries. Confidence scoring must incorporate geometric validity, spatial constraint satisfaction, and historical accuracy metrics. Architectural patterns for building resilient spatial agent routers are documented in [Fallback Routing for Geospatial Queries](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/fallback-routing-for-geospatial-queries/).
+That header is the highest-value fifty tokens in the prompt. Without it every answer implicitly claims completeness, and the ones about counts and extremes will be confidently wrong. Selection also has to be a spatial decision rather than a truncation — the thirty nearest, or the thirty largest, chosen by a rule the question implies and reported alongside the results. And the budget is allocated per layer rather than globally, because the densest layer is almost never the one holding the answer: see [context-window optimization for maps](/spatial-llm-architecture-core-concepts/context-window-optimization-for-maps/) and [budgeting tokens across map layers](/spatial-llm-architecture-core-concepts/context-window-optimization-for-maps/budgeting-tokens-across-map-layers/).
 
-## Multi-Modal Raster/Vector Integration
+A larger window moves this problem rather than removing it. Attention degrades over long contexts, so a window filled with marginal features measurably worsens answers compared with a well-chosen subset; selection remains a quality control after it has stopped being a capacity control.
 
-Enterprise spatial AI rarely operates on vectors alone. Satellite imagery, digital elevation models (DEMs), LiDAR point clouds, and vector boundaries must be fused into coherent reasoning contexts. Multi-modal integration requires synchronized tiling, cross-modal alignment, and consistent CRS enforcement across heterogeneous data types. Raster data must be chunked into model-compatible patches while preserving georeferencing metadata, and vector overlays must be rasterized or vectorized dynamically based on task requirements.
+<figure class="diagram">
+<svg viewBox="16 32 768 228" role="img" aria-labelledby="slm-fail-t slm-fail-d" xmlns="http://www.w3.org/2000/svg"><title id="slm-fail-t">Six silent failures and the layer that prevents each</title><desc id="slm-fail-d">Assumed frames, truncated geometry, unreported omission, recalled coordinates, composed relation claims and unmeasured regressions each produce fluent wrong answers, and each is prevented by one specific layer.</desc><rect x="16" y="32" width="768" height="228" fill="#ffffff"/><rect x="30" y="46" width="360" height="60" rx="8" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><rect x="410" y="46" width="360" height="60" rx="8" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><rect x="30" y="116" width="360" height="60" rx="8" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><rect x="410" y="116" width="360" height="60" rx="8" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><rect x="30" y="186" width="360" height="60" rx="8" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><rect x="410" y="186" width="360" height="60" rx="8" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><g fill="#1f2937" font-size="12.5" font-weight="600"><text x="50" y="70">assumed frame</text><text x="430" y="70">truncated geometry</text><text x="50" y="140">unreported omission</text><text x="430" y="140">recalled coordinate</text><text x="50" y="210">composed relation</text><text x="430" y="210">unmeasured regression</text></g><g fill="#5b6471" font-size="12"><text x="50" y="92">prevented by the ingestion gate</text><text x="430" y="92">prevented by the reduction ladder</text><text x="50" y="162">prevented by the selection header</text><text x="430" y="162">prevented by gazetteer grounding</text><text x="50" y="232">prevented by predicate verification</text><text x="430" y="232">prevented by the case set</text></g></svg>
+<figcaption><b>None of these raises an exception.</b> That is what unites them and why the controls are structural: each produces a well-formed answer, and the only thing distinguishing it from a correct one is a check that ran before it was composed.</figcaption>
+</figure>
+
+## Turning Names Into Positions You Can Defend
+
+Every spatial question that arrives in words has to become a position before anything can be computed. That conversion is where a system either acquires provenance or loses it, because a coordinate the model recalled looks identical to one that was looked up.
 
 ```python
-import rasterio
-from rasterio.mask import mask as rasterio_mask
-from shapely.geometry import shape
-import numpy as np
-
-def extract_vector_aligned_raster(
-    raster_path: str,
-    vector_geom: dict,
-    target_crs: str = "EPSG:4326",
-    crop: bool = True
-) -> tuple:
-    """Extracts raster data aligned to a vector geometry with strict CRS validation."""
-    with rasterio.open(raster_path) as src:
-        if src.crs is None:
-            raise ValueError("Raster lacks CRS definition. Cannot perform spatial alignment.")
-
-        geom = shape(vector_geom)
-        out_image, out_transform = rasterio_mask(src, [geom], crop=crop)
-
-        if out_image.size == 0:
-            raise RuntimeError("No raster data intersects the provided vector geometry.")
-
-        meta = {
-            "crs": src.crs.to_string(),
-            "transform": out_transform,
-        }
-        return out_image, meta
+def to_context(res: Resolution) -> dict:
+    """The shape every downstream stage should receive — never a bare coordinate pair."""
+    if res.record is None:
+        return {"resolved": False, "confidence": res.confidence,
+                "alternatives": [a.name for a in res.alternatives], "reason": res.rationale}
+    return {"resolved": True, "place_id": res.record.place_id, "bbox": res.record.bbox,
+            "confidence": res.confidence,
+            "alternatives": [a.name for a in res.alternatives]}
 ```
 
-Hybrid processing pipelines must handle scale mismatches, spectral normalization, and temporal alignment. Raster chunking strategies should respect tile boundaries to prevent edge artifacts during model inference. Comprehensive methodologies are outlined in [Vector Raster Hybrid Processing](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/vector-raster-hybrid-processing/).
+Two rules make this work. A model may propose a name and never a coordinate — extraction is a language task, location is a lookup. And ambiguity is the normal case rather than an exception, so a resolver that always returns one result has not simplified anything, it has moved the decision somewhere invisible. Where candidates are within scoring noise of each other, the honest output is no selection plus the alternatives, which lets the agent ask a four-word question instead of being wrong half the time. The mechanics are in [geocoding and place-name resolution](/spatial-llm-architecture-core-concepts/geocoding-and-place-name-resolution/) and [disambiguating duplicate toponyms with spatial context](/spatial-llm-architecture-core-concepts/geocoding-and-place-name-resolution/disambiguating-duplicate-toponyms-with-spatial-context/).
 
-## Evaluation & Benchmarking of Spatial Reasoning
+A resolution also carries an extent rather than a point. "Where is this county" has an answer thousands of square kilometres across, and collapsing it to a centroid produces distance calculations wrong by tens of kilometres in a way nothing detects.
 
-Standard NLP metrics never surface the ways a spatial LLM fails: a geometrically plausible answer can still sit in the wrong hemisphere, violate topology, or drift by hundreds of metres. Spatial systems must be scored against ground-truth geometry with dedicated metrics — spatial intersection-over-union $\mathrm{IoU}=\frac{|A\cap B|}{|A\cup B|}$, coordinate hallucination rate, and topology-violation counts — wired into CI so regressions block promotion rather than reaching production maps.
+## Verifying What the Model Says About Space
+
+"The depot is north of the river and inside the enterprise zone" is two claims and a conjunction, and a model will produce sentences like that from context supporting neither. Verification decomposes them and checks each against real geometry.
 
 ```python
-import logging
-from shapely.validation import make_valid
-from shapely.geometry.base import BaseGeometry
-
-logger = logging.getLogger(__name__)
-
-def spatial_iou(pred: BaseGeometry, truth: BaseGeometry) -> float:
-    """Intersection-over-union with a deterministic 0.0 fallback on degenerate input."""
-    try:
-        a, b = make_valid(pred), make_valid(truth)
-        union = a.union(b).area
-        if union == 0.0:
-            return 0.0  # both empty / zero-area — no credit, never divide by zero
-        return a.intersection(b).area / union
-    except Exception as exc:  # noqa: BLE001 — never let scoring crash a benchmark run
-        logger.warning("IoU computation failed, scoring 0.0: %s", exc)
-        return 0.0
+def check_topological(a, b, kind) -> tuple[bool | None, str]:
+    """Return (verdict, note). None means unverifiable — never a guess."""
+    if a is None or b is None:
+        return None, "one or both geometries unavailable"
+    if kind == "contains":
+        return b.contains(a), "exact predicate"
+    if kind == "adjacent":
+        return a.touches(b) or a.distance(b) < TOLERANCE, "within the stated tolerance"
+    return None, f"no exact predicate for {kind!r}"
 ```
 
-Treat these scores as release gates, not dashboards. Threshold pinning, golden-dataset regression harnesses, and coordinate-hallucination detection are detailed in [Evaluation and Benchmarking for Spatial LLMs](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/evaluation-and-benchmarking-for-spatial-llms/).
+The three-valued verdict is the whole design. "Not shown to be true" and "shown to be false" mean different things to a reader, and collapsing them makes an agent sound authoritative about the limits of its own data. Direction needs a stated convention rather than a predicate — a bearing sector, applied identically from every entry point — and distance needs a metric frame and a defined endpoint, because centroid and edge distances differ by more than a factor of two for ordinary shapes. See [spatial reasoning and relation inference](/spatial-llm-architecture-core-concepts/spatial-reasoning-and-relation-inference/).
 
-## Production Observability & Engineering Standards
+Some relations cannot be computed from the geometry most corpora hold. "Upstream of" needs a flow network; "overlooks" needs terrain and a viewshed. A registry of supported relations, with everything outside it routed to a refusal that names what would be needed, is more useful than a distance check wearing the wrong label.
 
-Deploying spatial LLMs at scale requires rigorous observability, automated evaluation, and continuous validation. Traditional ML metrics (accuracy, F1) are insufficient for spatial reasoning. Engineering teams must track spatial-specific KPIs: topological preservation rates, coordinate drift magnitude, CRS transformation errors, and fallback invocation frequency. CI/CD pipelines should integrate automated geometry validation, projection regression tests, and synthetic spatial query benchmarks before model promotion.
+## Combining Gridded and Vector Data
 
-Production-grade spatial LLM systems mandate:
-1. **Strict Input Validation:** All geometries must pass `is_valid`, CRS checks, and null sanitization before inference.
-2. **Deterministic Guardrails:** Tool-calling frameworks must route low-confidence spatial outputs to verified GIS backends.
-3. **Context Budget Management:** Tokenization must enforce precision limits, bounding-box clipping, and hierarchical spatial indexing.
-4. **Cross-Modal Alignment:** Raster and vector streams must maintain synchronized CRS, temporal stamps, and spatial extents.
-5. **Continuous Evaluation:** Automated pipelines must measure spatial IoU, topology violation rates, and fallback routing latency.
+A model cannot read a raster; it can read a statement derived from one. Producing that statement correctly means clipping to the shape rather than its bounding box, sampling at a resolution the question can support, and rounding to a precision the sample justifies.
 
-By embedding validation-first principles into every layer of the inference stack, organizations can transition spatial LLMs from experimental prototypes to mission-critical infrastructure.
+```python
+def to_statement(name, proportions, labels, grid, coverage) -> str:
+    """One sentence a model can quote, with everything a reader needs to judge it."""
+    top = ", ".join(f"{labels.get(c, c)} {p:g}%" for c, p in list(proportions.items())[:4])
+    date = f", captured {grid.captured_year}" if grid.captured_year else ""
+    cover = "" if coverage > 0.98 else f", from {coverage * 100:.0f}% of the shape"
+    return f"{name}: {top} (from {grid.pixel_size_m:g} m data{date}{cover})."
+```
+
+Three of those four components are routinely dropped, and the figure alone is the part that means least without them. A thirty-metre grid cannot describe a single building, and the honest response to a shape smaller than a few cells is a refusal naming the cell count rather than a percentage. The pipeline is set out in [vector-raster hybrid processing](/spatial-llm-architecture-core-concepts/vector-raster-hybrid-processing/), with the reading mechanics in [aligning raster tiles with vector masks](/spatial-llm-architecture-core-concepts/vector-raster-hybrid-processing/aligning-raster-tiles-with-vector-masks-for-llm-context/).
+
+## Choosing Embeddings for a Geometry-Bearing Corpus
+
+Retrieval over these corpora is ordinary technical-prose retrieval with an unusual metadata layer, and the most consequential decision is one number: dimensionality, which sets the memory footprint of every index and every replica.
+
+```python
+def embedding_text(chunk) -> str:
+    """What gets embedded. Coordinates deliberately excluded."""
+    head = [p for p in (chunk.name, chunk.feature_type,
+                        ", ".join(chunk.parents[:2])) if p]
+    return f"{' — '.join(head)}\n{chunk.body}" if head else chunk.body
+```
+
+Coordinates do not belong in the vector. Embedding a number places it near other numbers of similar magnitude, which has nothing to do with proximity on the ground, and it consumes dimensions meant to carry meaning. Position belongs in a spatial index where it can be filtered exactly. Dimensionality should be the smallest that holds recall on your own corpus under a real region filter — usually far below the largest available, since the curve flattens early on technical prose. See [spatial embedding models](/spatial-llm-architecture-core-concepts/spatial-embedding-models/) and [choosing vector dimensionality for spatial retrieval](/spatial-llm-architecture-core-concepts/spatial-embedding-models/choosing-vector-dimensionality-for-spatial-retrieval/).
+
+## Degrading Deliberately When Something Is Unavailable
+
+A spatial query has more ways to fail than a text one, and each failure leaves the agent holding a question it can still partly answer. Fallback routing is the design of that partial answer.
+
+```python
+def route(request, ladder, budget_s) -> Outcome:
+    """Walk the ladder inside one shared deadline; each rung states its claim."""
+    started = time.monotonic()
+    for rung in ladder:
+        left = budget_s - (time.monotonic() - started)
+        if left <= 0 or left < rung.typical_s * 0.5:
+            continue                                   # admission: do not start what cannot finish
+        try:
+            return Outcome(rung.run(request, left), rung.name, rung.claim)
+        except Degradable:
+            continue
+    return Outcome(None, "refusal", "none")
+```
+
+Every fallback is a smaller claim, and the claim has to reach the answer text — a degraded result that reads exactly like an exact one has converted a precision loss into a correctness claim. The deadline is shared rather than per attempt, so three failing rungs cost one budget rather than three. And some intents do not degrade at all: a boundary-membership question answered from a simplified geometry is a coin flip presented as a fact. See [fallback routing for geospatial queries](/spatial-llm-architecture-core-concepts/fallback-routing-for-geospatial-queries/) and [deadline propagation and timeout budgets](/spatial-llm-architecture-core-concepts/fallback-routing-for-geospatial-queries/deadline-propagation-and-timeout-budgets/).
+
+## Measuring Whether Any of It Improved
+
+General language benchmarks say nothing about whether a system puts things in the right place. Spatial evaluation measures four independent families, and reports them separately because they are fixed by different work.
+
+```python
+def summarise(results) -> dict:
+    """Break down by family and region; no aggregate is produced."""
+    report = {}
+    for (family, region), rows in group(results):
+        scores = sorted(r["score"] for r in rows)
+        report[f"{family}/{region}"] = {
+            "n": len(rows),
+            "median": scores[len(scores) // 2],
+            "p10": scores[max(0, int(0.1 * len(scores)) - 1)],
+            "parse_rate": round(sum(r["parsed"] for r in rows) / len(rows), 4)}
+    return report
+```
+
+Three properties make this honest. Parse failures are results rather than exclusions, since dropping unreadable output flatters the model exactly where it is weakest. Refusal is scored as a success on cases that cannot be answered, or the highest-scoring system is the one that never declines. And the gate reads a percentile rather than a mean, because spatial scores are bimodal — answers are close or badly wrong — and the mean sits between the two modes describing neither. See [evaluation and benchmarking for spatial LLMs](/spatial-llm-architecture-core-concepts/evaluation-and-benchmarking-for-spatial-llms/).
+
+<figure class="diagram">
+<svg viewBox="16 32 748 214" role="img" aria-labelledby="slm-dep-t slm-dep-d" xmlns="http://www.w3.org/2000/svg"><title id="slm-dep-t">What each layer assumes about the one before it</title><desc id="slm-dep-d">Tokenization assumes a known frame, context assembly assumes parseable geometry, relation checking assumes resolved positions, and evaluation assumes all of them are recorded.</desc><rect x="16" y="32" width="748" height="214" fill="#ffffff"/><rect x="30" y="46" width="360" height="86" rx="8" fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2"/><rect x="410" y="46" width="340" height="86" rx="8" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="30" y="146" width="360" height="86" rx="8" fill="#efe9fd" stroke="#6d4bbd" stroke-width="2"/><rect x="410" y="146" width="340" height="86" rx="8" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/><g fill="#1f2937" font-size="13" font-weight="600"><text x="52" y="76">tokenization assumes</text><text x="432" y="76">context assembly assumes</text><text x="52" y="176">relation checking assumes</text><text x="432" y="176">evaluation assumes</text></g><g fill="#5b6471" font-size="12"><text x="52" y="102">a known frame — otherwise precision</text><text x="52" y="122">means nothing</text><text x="432" y="102">parseable geometry — otherwise the</text><text x="432" y="122">budget protects noise</text><text x="52" y="202">resolved positions — otherwise the</text><text x="52" y="222">predicate runs on the wrong shape</text><text x="432" y="202">everything recorded — otherwise a</text><text x="432" y="222">score change cannot be attributed</text></g></svg>
+<figcaption><b>Skip a layer and the next one still runs.</b> That is the difficulty: each layer's assumption is invisible when violated, so a system missing the ingestion gate produces tokenized geometry, assembled context and verified relations — all computed correctly over coordinates that mean something else.</figcaption>
+</figure>
+
+## What Changes When the System Is Built This Way
+
+Three things are noticeably different about a spatial system with these layers in place, and none of them is speed.
+
+The first is that failures become visible. A pipeline without an ingestion gate does not fail — it produces answers that are wrong by a datum shift, and the first sign is a user noticing that a distance does not match their map, months later, with no record of how the geometry got there. With the gate, the same input produces a rejection on the day it arrives, attributed to a source, with a reason someone can act on. The total number of problems is identical; what changes is when they surface and whether they are attributable.
+
+The second is that answers acquire limits. A system that resolves places through a gazetteer, verifies relations against predicates and reports what it omitted will decline questions it cannot support — and users find that far easier to work with than confident answers of unknown reliability. The refusals are not a cost of the architecture; they are its most visible product, because they are the cases where a system without it would have guessed.
+
+The third is that changes become measurable. A prompt edit, a chunking change and a library upgrade all move the same numbers, and without a case set and a recorded environment there is no way to say which. Teams without evaluation do not stop changing things; they stop being able to tell whether the changes helped, which over a year produces a system nobody is willing to modify.
+
+None of this requires the full apparatus on day one. The gate and the no-coordinate rule can be a hundred lines; the case set can be three frozen cases in a script. What matters is that the shape is right early, because every one of these layers is cheaper to add before the corpus exists than after.
+
+## Where the Layers Meet Their Limits
+
+It is worth being explicit about what this architecture does not do, since each limit is a place where teams reasonably reach for something else.
+
+It does not make a model good at geometry. Verification catches false relation claims and does not help a model produce better ones; a system whose relation claims are usually wrong will spend most of its time hedging. The fix there is upstream — better retrieved context, precomputed facts in the prompt — rather than a stricter checker.
+
+It does not answer questions the data cannot support. A thirty-metre raster will not describe a building, a gazetteer without small features will not resolve a field name, and no amount of engineering converts absent data into a defensible answer. The layers make that boundary explicit, which is genuinely valuable and is frequently mistaken for a shortcoming of the system rather than of its inputs.
+
+It does not remove the need for judgement about thresholds. Every band, tolerance and weight described here is a policy: the confidence at which a measured claim is permitted, the tolerance at which two parcels count as adjacent, the cell count below which a proportion is refused. Those numbers are decisions, they belong to the people who answer for the answers, and writing them down is the whole of the discipline.
+
+## Production Engineering Standards
+
+1. **No geometry enters without a declared frame.** Undeclared coordinates are rejected into a queue a person reads, never assumed to be geographic. Per-source defaults are permitted, recorded with their evidence, and reviewed.
+2. **Every transformation is recorded.** Source code, target code and the transformation path travel with the geometry, because datum transformations are not unique and two environments can disagree by a metre.
+3. **Measurement never happens in the storage frame.** Areas use an equal-area projection, distances a projection centred on the subject, and both record which one produced the number.
+4. **Geometry is reduced along a ladder, never truncated.** Precision first, then vertices, then the extent — each rung reported to the consumer so a simplified boundary is never mistaken for the real one.
+5. **Every prompt states its selection rule and its omission.** The features shown, the rule that chose them, and a summary of what was left out, or answers about counts and coverage cannot be trusted.
+6. **No coordinate reaches the geometry layer without a place identifier.** Positions come from lookups with provenance and confidence; a model-produced coordinate is screened before anything acts on it.
+7. **Relations are computed or marked unverifiable.** Three-valued verdicts throughout, with the convention and tolerance stated, and a falsified load-bearing claim stops the turn rather than being hedged.
+8. **Every answer that degraded says so.** The fallback rung's claim reaches the answer text, and boundary-membership questions refuse rather than approximate.
+9. **Releases are gated on a percentile, per family and per region.** Parse failures score as results, refusals score as successes where refusal was correct, and the gate's overrides are recorded with a reason.
+10. **The harness proves it did not move before the agent is blamed.** Library versions, tokenizer and case-set digest are captured with every sweep, and a self-check on frozen cases runs first.
+
+## Frequently Asked Questions
+
+<details class="faq-item"><summary><span>Which layer should a team build first?</span></summary><p>The ingestion gate, without close competition. Every other layer computes over geometry, and geometry whose frame is unknown makes all of that computation meaningless in a way no later check can recover. It is also the cheapest to add early and the most painful to retrofit, because retrofitting means re-normalising a corpus whose provenance was never recorded.</p></details>
+
+<details class="faq-item"><summary><span>Is a specialised spatial model needed for any of this?</span></summary><p>Almost never. The work here is engineering around a general model rather than replacing it: resolution is a lookup, relations are predicates, measurement is a projection, and the model's job is language. Where specialised models genuinely help is in tasks where the shape itself is the subject — matching footprints, clustering trajectories — which is a different problem from answering questions about places.</p></details>
+
+<details class="faq-item"><summary><span>How do these layers relate to retrieval?</span></summary><p>They sit underneath it. <a href="/geospatial-rag-pipelines/">Geospatial RAG pipelines</a> assembles the context a model reasons over, and it depends on the representation and frame decisions made here — a chunk cannot carry a defensible extent unless the geometry inside it was normalised first. The boundary is worth stating plainly: this section decides what a geometry means, retrieval decides which ones the model sees.</p></details>
+
+<details class="faq-item"><summary><span>What does an agent do with all this?</span></summary><p>It routes. Once context is assembled and positions are resolved, the remaining decisions are which tool to call, how to recover when a call fails, and what to spend — the subject of <a href="/geospatial-prompt-engineering-tool-routing/">geospatial prompt engineering and tool routing</a>. Confusing the two produces a system that retries a search when it should have called a geometry engine.</p></details>
+
+<details class="faq-item"><summary><span>How much of this is needed for a small internal tool?</span></summary><p>The ingestion gate and the no-coordinate rule, at minimum, because those two prevent the failures that are hardest to detect and most damaging when they reach a decision. Evaluation can start as three frozen cases in a script. Fallback routing can be one cached rung. The layers scale down considerably; what does not scale down is the discipline of refusing to assume a frame and refusing to accept a recalled coordinate.</p></details>
+
+## Related
+
+- Section: [Geospatial RAG Pipelines](/geospatial-rag-pipelines/) — assembling context from geometry-bearing corpora
+- Section: [Geospatial Prompt Engineering and Tool Routing](/geospatial-prompt-engineering-tool-routing/) — what an agent does with that context
+- Topic: [Coordinate Reference System Normalization](/spatial-llm-architecture-core-concepts/coordinate-reference-system-normalization/)
+- Topic: [Geometry Tokenization Strategies](/spatial-llm-architecture-core-concepts/geometry-tokenization-strategies/)
+- Topic: [Context-Window Optimization for Maps](/spatial-llm-architecture-core-concepts/context-window-optimization-for-maps/)
+- Topic: [Geocoding and Place-Name Resolution](/spatial-llm-architecture-core-concepts/geocoding-and-place-name-resolution/)
+- Topic: [Spatial Reasoning and Relation Inference](/spatial-llm-architecture-core-concepts/spatial-reasoning-and-relation-inference/)
+- Topic: [Vector-Raster Hybrid Processing](/spatial-llm-architecture-core-concepts/vector-raster-hybrid-processing/)
+- Topic: [Spatial Embedding Models](/spatial-llm-architecture-core-concepts/spatial-embedding-models/)
+- Topic: [Fallback Routing for Geospatial Queries](/spatial-llm-architecture-core-concepts/fallback-routing-for-geospatial-queries/)
+- Topic: [Evaluation and Benchmarking for Spatial LLMs](/spatial-llm-architecture-core-concepts/evaluation-and-benchmarking-for-spatial-llms/)

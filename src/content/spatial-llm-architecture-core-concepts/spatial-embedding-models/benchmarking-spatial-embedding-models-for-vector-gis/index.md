@@ -1,184 +1,201 @@
+---
+title: Benchmarking Spatial Embedding Models for Vector GIS
+description: Compare embedding candidates on your own place-oriented queries under a real region filter, and report the numbers that decide it rather than the ones that are published.
+slug: benchmarking-spatial-embedding-models-for-vector-gis
+type: howto
+breadcrumb: Benchmarking Embeddings
+datePublished: 2025-02-19
+dateModified: 2026-08-11
+---
+
 # Benchmarking Spatial Embedding Models for Vector GIS
 
-When evaluating [Spatial Embedding Models](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/spatial-embedding-models/) for production vector GIS pipelines, the primary bottleneck rarely stems from raw compute capacity. Instead, it emerges from silent geometric degradation during tokenization, coordinate reference system (CRS) misalignment, and unbounded context window consumption. Benchmarking Spatial Embedding Models for Vector GIS requires a deterministic validation framework that isolates embedding instability, enforces strict geometric normalization gates, and routes queries safely under edge-case spatial distributions. This article details a reproducible pipeline architecture, failure mode taxonomy, and production-ready mitigation strategies tailored for AI/ML engineers, spatial data scientists, and platform teams deploying geospatial AI at scale.
+Published embedding benchmarks measure general text and rank models accordingly. A corpus of survey reports, planning documents and site assessments is not general text, and the ranking frequently reorders on it — usually in favour of a smaller model. This guide runs the comparison that actually decides the choice, as the measurement half of [spatial embedding models](/spatial-llm-architecture-core-concepts/spatial-embedding-models/).
 
-## Deterministic Validation Pipeline Architecture
+## When to Use This Approach
 
-Within the broader [Spatial LLM Architecture & Core Concepts](https://www.spatialllm.org/spatial-llm-architecture-core-concepts/), vector GIS workloads demand topological fidelity that breaks under naive string serialization or unnormalized coordinate spaces. A robust benchmarking pipeline must enforce three sequential validation layers before embedding generation:
+Benchmark when choosing a model, when a candidate replacement appears, and when the corpus acquires a substantially new kind of document. Not otherwise — the comparison costs a day and its answer is stable between those events.
 
-1. **CRS Normalization & Projection Validation**: All input geometries must be transformed to a canonical reference system (typically EPSG:4326) to prevent scale distortion from shifting latent space centroids.
-2. **Geometry Tokenization Boundary Control**: Complex polygons and multi-part linestrings require adaptive simplification and topological relation encoding to prevent arbitrary token truncation from breaking spatial continuity.
-3. **Context Window Optimization & Fallback Routing**: When serialized geometries exceed token limits, the pipeline must trigger hierarchical summarization or route to a spatial index-backed fallback rather than silently dropping features.
+| Measurement | Decides | Usually published? |
+|-------------|---------|--------------------|
+| Recall on your queries | Almost everything | No |
+| Recall under a region filter | Whether it suits this workload | No |
+| Recall on rare place names | Whether the lexical half is doing all the work | No |
+| Encoding throughput | Rebuild time | Sometimes |
+| Dimensionality | The memory bill | Yes |
+| General benchmark score | Little | Always |
 
-The following implementation demonstrates a production-grade benchmark harness that integrates strict schema validation, deterministic CRS normalization, and adaptive tokenization.
+The inversion in that table is the point. The one number that is always available is the one least likely to decide the outcome, and the numbers that decide it have to be produced locally.
+
+<figure class="diagram">
+<svg viewBox="26 9 588 237" role="img" aria-labelledby="bse-set-t bse-set-d" xmlns="http://www.w3.org/2000/svg"><title id="bse-set-t">What a place-oriented evaluation set looks like</title><desc id="bse-set-d">The query mix that decides an embedding choice for a spatial corpus is dominated by named places, feature types and local descriptions rather than by general paraphrase.</desc><rect x="26" y="9" width="588" height="237" fill="#ffffff"/><text x="390" y="34" fill="#5b6471" font-size="13" text-anchor="middle">The query mix a spatial corpus actually receives</text><rect x="220" y="56" width="380" height="38" rx="5" fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2"/><rect x="220" y="102" width="280" height="38" rx="5" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="220" y="148" width="200" height="38" rx="5" fill="#efe9fd" stroke="#6d4bbd" stroke-width="2"/><rect x="220" y="194" width="90" height="38" rx="5" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/><g fill="#1f2937" font-size="12.5"><text x="40" y="81">named place</text><text x="40" y="127">feature type</text><text x="40" y="173">local description</text><text x="40" y="219">general prose</text></g><g fill="#1f2937" font-size="12" text-anchor="middle"><text x="410" y="81">42%</text><text x="360" y="127">28%</text><text x="320" y="173">21%</text><text x="265" y="219">9%</text></g></svg>
+<figcaption><b>Nine per cent of this mix resembles a general benchmark.</b> A model ranked on the bottom bar is being ranked on the smallest slice of the workload, which is why local measurement so often reorders the published list.</figcaption>
+</figure>
+
+## Implementation
+
+The harness encodes the corpus once per candidate, runs the evaluation set with and without a region filter, and reports both alongside cost.
 
 ```python
 import logging
-import numpy as np
-from pydantic import BaseModel, field_validator, ValidationError
-from shapely.geometry import shape, mapping, box
-from shapely.validation import make_valid
-from shapely.ops import transform
-from shapely.errors import TopologicalError
-from pyproj import Transformer, CRS
-from typing import Dict, List, Optional
-import warnings
+import time
+from dataclasses import dataclass
+from typing import Callable, Sequence
 
-logger = logging.getLogger("spatial_benchmark")
+log = logging.getLogger("embedding_benchmark")
 
-class SpatialBenchmarkError(Exception):
-    """Custom exception for spatial pipeline failures."""
-    pass
 
-class SpatialBenchmarkConfig(BaseModel):
-    target_crs: str = "EPSG:4326"
-    max_token_length: int = 8192
-    cosine_similarity_threshold: float = 0.85
-    enable_topology_check: bool = True
-    fallback_to_raster: bool = True
+@dataclass(frozen=True)
+class Candidate:
+    name: str
+    dim: int
+    encode: Callable[[Sequence[str]], object]     # batch encode
+    max_input_tokens: int
 
-class GeometryPayload(BaseModel):
-    geojson: Dict
-    metadata: Optional[Dict] = None
 
-    @field_validator("geojson")
-    @classmethod
-    def validate_geometry(cls, v: Dict) -> Dict:
-        try:
-            geom = shape(v)
-        except Exception as e:
-            raise SpatialBenchmarkError(f"Invalid GeoJSON structure: {e}")
+@dataclass(frozen=True)
+class Result:
+    name: str
+    dim: int
+    recall_unfiltered: float
+    recall_filtered: float
+    recall_rare_names: float
+    encode_docs_per_s: float
+    notes: tuple[str, ...]
 
-        if not geom.is_valid:
-            geom = make_valid(geom)
-            warnings.warn("Input geometry was self-intersecting or invalid. Auto-repaired via make_valid().")
 
-        # Explicit coordinate validation
-        bounds = geom.bounds
-        if any(np.isnan(b) or np.isinf(b) for b in bounds):
-            raise SpatialBenchmarkError("Geometry contains NaN or Inf coordinates.")
-        if bounds[0] < -180 or bounds[2] > 180 or bounds[1] < -90 or bounds[3] > 90:
-            raise SpatialBenchmarkError("Coordinates exceed valid WGS84 bounds [-180, 180] x [-90, 90].")
+def evaluate(candidate: Candidate, corpus: Sequence[dict], queries: Sequence[dict],
+             search, k: int = 10) -> Result:
+    """Encode the corpus once, then measure three recall figures and throughput."""
+    notes: list[str] = []
+    texts = [c["embedding_text"] for c in corpus]
 
-        return mapping(geom)
+    started = time.monotonic()
+    try:
+        vectors = candidate.encode(texts)
+    except Exception as exc:                        # a candidate that cannot encode is a result
+        log.warning("%s failed to encode the corpus: %s", candidate.name, exc)
+        return Result(candidate.name, candidate.dim, 0.0, 0.0, 0.0, 0.0,
+                      (f"encode failed: {exc}",))
+    throughput = len(texts) / max(1e-6, time.monotonic() - started)
 
-class SpatialBenchmarkHarness:
-    def __init__(self, config: SpatialBenchmarkConfig):
-        self.config = config
-
-    def normalize_crs(self, payload: GeometryPayload, source_crs: str) -> Dict:
-        """Deterministic CRS normalization with explicit error handling."""
-        try:
-            # CRS.from_user_input raises CRSError on malformed definitions
-            src_crs = CRS.from_user_input(source_crs)
-            tgt_crs = CRS.from_user_input(self.config.target_crs)
-
-            geom = shape(payload.geojson)
-            transformer = Transformer.from_crs(src_crs, tgt_crs, always_xy=True)
-            normalized = transform(transformer.transform, geom)
-            return mapping(normalized)
-        except SpatialBenchmarkError:
-            raise
-        except Exception as e:
-            logger.error(f"CRS normalization failed for {payload.metadata}: {e}")
-            raise SpatialBenchmarkError(f"CRS transformation failed: {e}") from e
-
-    def estimate_token_length(self, geojson: Dict) -> int:
-        """Approximate token consumption based on coordinate pairs and JSON structure."""
-        coords_str = str(geojson)
-        # Rough heuristic: ~1.5 tokens per coordinate pair + structural overhead
-        coord_count = len(coords_str.replace(",", "").split())
-        return int(coord_count * 1.5) + 120
-
-    def route_or_fallback(self, payload: GeometryPayload, token_count: int) -> Dict:
-        """Context window optimization with explicit fallback routing."""
-        if token_count <= self.config.max_token_length:
-            return {"status": "accepted", "payload": payload, "tokens": token_count}
-
-        if self.config.fallback_to_raster:
-            logger.warning(f"Token limit exceeded ({token_count}). Routing to rasterized fallback.")
-            return {
-                "status": "fallback_raster",
-                "payload": payload,
-                "tokens": token_count,
-                "action": "trigger_raster_tiling_pipeline"
-            }
-        else:
-            raise SpatialBenchmarkError(
-                f"Context window exceeded ({token_count}/{self.config.max_token_length}). "
-                "Fallback disabled. Rejecting payload."
-            )
-
-    def run_benchmark(self, payloads: List[GeometryPayload], source_crs: str) -> List[Dict]:
-        results = []
-        for p in payloads:
+    def recall(subset, region_filter) -> float:
+        hit = tot = 0
+        for q in subset:
+            want = set(q["relevant"])
+            if not want:
+                continue
             try:
-                norm_geojson = self.normalize_crs(p, source_crs)
-                tokens = self.estimate_token_length(norm_geojson)
-                route = self.route_or_fallback(p, tokens)
-                results.append(route)
-            except SpatialBenchmarkError as e:
-                results.append({"status": "rejected", "error": str(e), "metadata": p.metadata})
-            except Exception as e:
-                logger.critical(f"Unhandled pipeline exception: {e}")
-                results.append({"status": "critical_failure", "error": str(e)})
-        return results
+                got = set(search(candidate.encode([q["text"]])[0], vectors, k, region_filter))
+            except Exception as exc:
+                notes.append(f"search failed on {q['id']}: {exc}")
+                got = set()
+            hit += len(want & got)
+            tot += len(want)
+        return round(hit / tot, 4) if tot else 0.0
+
+    rare = [q for q in queries if q.get("has_rare_name")]
+    return Result(
+        candidate.name, candidate.dim,
+        recall(queries, None),
+        recall(queries, "region"),
+        recall(rare, "region") if rare else 0.0,
+        round(throughput, 1),
+        tuple(notes[:5]),
+    )
 ```
 
-### Coordinate Validation & Error Handling
+Encoding the corpus once per candidate rather than per query is what makes the harness affordable; the query encoding inside the recall loop is the small cost. Recording throughput at the same time is nearly free and answers the rebuild-time question that will be asked immediately afterwards.
 
-The validation gate above enforces strict bounds checking and topology repair before any embedding model processes the data. Silent coordinate drift is a leading cause of latent space collapse in spatial models. The pipeline explicitly rejects geometries containing `NaN`/`Inf` values, out-of-bounds WGS84 coordinates, or malformed GeoJSON structures.
+Separating the rare-name recall is the measurement most likely to change a decision. If a candidate's overall recall is competitive but its rare-name recall is poor, the lexical half of a hybrid system is carrying those queries — which is fine, and it means the dense half is contributing less than the headline number suggests.
 
-When integrating into a broader system, wrap the `SpatialBenchmarkHarness` in an async worker queue. Use structured logging to capture rejection reasons, and implement a dead-letter queue (DLQ) for payloads that fail CRS normalization.
+```python
+def summarise(results: Sequence[Result], target_gap: float = 0.02) -> str:
+    """Report the comparison in the terms that decide it."""
+    if not results:
+        return "no candidates evaluated"
+    best_filtered = max(results, key=lambda r: r.recall_filtered)
+    close = [r for r in results
+             if best_filtered.recall_filtered - r.recall_filtered <= target_gap]
+    cheapest = min(close, key=lambda r: (r.dim, -r.encode_docs_per_s))
+    if cheapest.name != best_filtered.name:
+        return (f"{cheapest.name} at dim {cheapest.dim} is within {target_gap:.02f} "
+                f"of {best_filtered.name} on filtered recall, at lower cost")
+    return f"{best_filtered.name} leads on filtered recall at dim {best_filtered.dim}"
+```
 
-**Next Steps for Pipeline Integration:**
-1. Replace the heuristic token estimator with a model-specific tokenizer (e.g., `tiktoken` or custom spatial tokenizers) for precise context accounting.
-2. Attach Prometheus/Grafana metrics to the `SpatialBenchmarkError` catch blocks to track rejection rates by CRS type and geometry complexity.
-3. Implement a retry mechanism with exponential backoff for transient projection service failures.
+<figure class="diagram">
+<svg viewBox="16 24 598 226" role="img" aria-labelledby="bse-flip-t bse-flip-d" xmlns="http://www.w3.org/2000/svg"><title id="bse-flip-t">A ranking that reorders under a region filter</title><desc id="bse-flip-d">Two candidates are close on unfiltered recall and separate clearly once a region filter removes most of the corpus, which is the condition the real workload runs under.</desc><rect x="16" y="24" width="598" height="226" fill="#ffffff"/><text x="30" y="62" fill="#5b6471" font-size="12.5">unfiltered</text><rect x="180" y="38" width="420" height="42" rx="5" fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2"/><rect x="180" y="86" width="404" height="42" rx="5" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><g fill="#1f2937" font-size="11.5"><text x="200" y="64">model A — 0.93</text><text x="200" y="112">model B — 0.91</text></g><text x="30" y="182" fill="#5b6471" font-size="12.5">filtered</text><rect x="180" y="158" width="240" height="42" rx="5" fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2"/><rect x="180" y="206" width="380" height="42" rx="5" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><g fill="#1f2937" font-size="11.5"><text x="200" y="184">model A — 0.61</text><text x="200" y="232">model B — 0.88</text></g></svg>
+<figcaption><b>The order reverses where the workload lives.</b> Unfiltered recall separates these candidates by two points; under the filter that every real query carries, it separates them by twenty-seven.</figcaption>
+</figure>
 
-## Failure Mode Taxonomy & Debugging Protocols
+## Validation & Testing
 
-Benchmarking spatial embeddings requires isolating specific degradation vectors. The table below maps common failure modes to root causes and debugging actions:
+```python
+def test_encode_failure_is_a_result_not_an_abort():
+    class Broken(Candidate):
+        pass
+    broken = Candidate("broken", 384, lambda _t: (_ for _ in ()).throw(RuntimeError("x")), 512)
+    r = evaluate(broken, CORPUS, QUERIES, search)
+    assert r.recall_filtered == 0.0 and r.notes
 
-| Failure Mode | Root Cause | Debugging Action | Mitigation Strategy |
-|--------------|------------|------------------|---------------------|
-| **Latent Space Drift** | Mixed CRS inputs without normalization | Plot PCA/t-SNE of embeddings colored by source CRS | Enforce strict CRS normalization gate pre-embedding |
-| **Topology Collapse** | Self-intersecting polygons or duplicate vertices | Run `shapely.validation.explain_validity()` | Apply `make_valid()` + `buffer(0)` deduplication |
-| **Context Truncation** | High-precision coordinates exceeding token limits | Log coordinate precision vs. token budget | Downsample coordinates via Douglas-Peucker before serialization |
-| **Silent Feature Drop** | Unhandled context overflow in batch processing | Monitor batch success/failure ratios | Implement hierarchical routing (vector → raster → metadata-only) |
-| **Embedding Instability** | Non-deterministic token ordering | Compare cosine similarity across 10+ runs | Fix coordinate sorting order (lexicographic) and seed RNG |
 
-When debugging embedding instability, always isolate the geometric serialization step. Use a controlled dataset of known topologies (e.g., OGC test geometries) to establish a baseline cosine similarity threshold. Deviations above `1 - cosine_similarity_threshold` indicate tokenization or projection leakage.
+def test_filtered_and_unfiltered_are_reported_separately():
+    r = evaluate(CANDIDATE, CORPUS, QUERIES, search)
+    assert r.recall_unfiltered != r.recall_filtered or len(QUERIES) < 5
 
-## Benchmarking Metrics & Latent Space Stability
 
-Standard NLP metrics (BLEU, ROUGE, perplexity) are insufficient for spatial embeddings. A rigorous benchmark must evaluate geometric preservation, projection invariance, and spatial reasoning accuracy.
+def test_summary_prefers_a_cheaper_candidate_within_the_gap():
+    results = [Result("big", 1536, 0.93, 0.90, 0.7, 40.0, ()),
+               Result("small", 384, 0.91, 0.89, 0.7, 180.0, ())]
+    assert "small" in summarise(results, target_gap=0.02)
 
-**Core Metrics:**
-- **Spatial IoU Preservation**: Compare intersection-over-union of original vs. reconstructed geometries from decoded embeddings.
-- **CRS Drift Penalty**: Measure cosine similarity degradation when the same geometry is projected through different CRS paths before embedding.
-- **Token Efficiency Ratio**: `(Valid Spatial Features) / (Total Tokens Consumed)`. Optimizes context window utilization.
-- **Hausdorff Distance Fidelity**: Quantifies maximum point-wise deviation between original and embedding-reconstructed boundaries.
 
-To implement reproducible benchmarking, maintain a versioned test corpus containing:
-1. Simple primitives (points, lines, convex polygons)
-2. Complex topologies (multi-polygons, holes, self-intersections)
-3. Edge cases (antimeridian crossings, polar projections, zero-area slivers)
+def test_rare_name_recall_is_measured_on_a_subset():
+    r = evaluate(CANDIDATE, CORPUS, [q for q in QUERIES if q.get("has_rare_name")], search)
+    assert 0.0 <= r.recall_rare_names <= 1.0
+```
 
-Run embeddings across multiple model variants, then aggregate metrics using statistical bootstrapping to account for stochastic training variance. Store results in a structured format (e.g., Parquet with spatial metadata columns) for longitudinal tracking.
+The third test encodes the decision rule rather than a measurement, which is the point of having a summary function at all. Left to a table of numbers, a comparison is settled by whoever reads it first; a rule that prefers the cheaper candidate within a stated gap makes the trade explicit and reviewable.
 
-## Production Integration & Next Steps
+Record the harness output as a file in the repository rather than as a message in a channel. The comparison will be re-litigated — when a new model appears, when someone new joins, when recall drops — and a stored table with its conditions attached settles the question in minutes where a remembered conclusion restarts it.
 
-Deploying benchmarked spatial embeddings into production requires bridging the gap between offline validation and real-time inference. Follow this phased integration checklist:
+## Gotchas & Edge Cases
 
-1. **Schema Enforcement at Ingestion**: Deploy Pydantic validators at API gateways. Reject malformed GeoJSON before it reaches the embedding service.
-2. **Deterministic Preprocessing Pipeline**: Containerize the `SpatialBenchmarkHarness` with pinned versions of `shapely`, `pyproj`, and `numpy`. Ensure GEOS and PROJ library versions match across dev/staging/prod environments.
-3. **Fallback Routing Configuration**: Implement a circuit breaker that switches from vector embedding to raster tile or metadata-only routing when context windows saturate. Use [OGC GeoJSON Specification](https://geojson.org/) compliance checks to guarantee fallback compatibility.
-4. **Continuous Benchmarking in CI/CD**: Integrate a nightly benchmark job that runs the test corpus against new model weights. Block deployments if spatial IoU drops below 0.85 or CRS drift penalty exceeds 15%.
-5. **Observability & Alerting**: Instrument the pipeline with OpenTelemetry traces. Alert on `SpatialBenchmarkError` spikes, token budget overruns, or embedding similarity decay.
+**Evaluating on queries written by the person choosing the model.** They will unconsciously favour the phrasing the current system handles. Draw queries from real traffic, or from the corpus by someone who has not seen the candidates.
 
-For teams scaling geospatial AI workloads, prioritize coordinate validation and context window management over raw model size. A smaller embedding model with strict geometric normalization gates will consistently outperform a larger model fed unvalidated, projection-mixed vectors.
+**Corpus sample too small to cluster.** A few thousand chunks drawn at random are more uniformly distributed than the real corpus, which flatters every candidate. Sample by region and keep everything from those regions.
 
-## Conclusion
+**Chunk text differing between candidates.** If one candidate is fed the chunk body and another the constructed embedding text, the comparison measures the construction. Build the text once and reuse it.
 
-Benchmarking Spatial Embedding Models for Vector GIS is fundamentally a data integrity and pipeline architecture challenge. By enforcing deterministic CRS normalization, implementing explicit coordinate validation, and designing adaptive fallback routing, platform teams can eliminate silent geometric degradation and ensure stable latent space representations. The validation harness provided here serves as a production-ready foundation for isolating embedding instability, tracking spatial metrics, and safely scaling vector GIS workloads under real-world edge cases.
+**Input truncation going unnoticed.** A candidate with a shorter input limit silently truncates long chunks and loses their tails. Check the corpus percentile against the limit before encoding, and record it as a note rather than discovering it as poor recall.
+
+<figure class="diagram">
+<svg viewBox="40 42 681 180" role="img" aria-labelledby="bse-trunc-t bse-trunc-d" xmlns="http://www.w3.org/2000/svg"><title id="bse-trunc-t">Silent truncation against a candidate&#8217;s input limit</title><desc id="bse-trunc-d">A candidate with a shorter input limit drops the tail of long chunks without error, so its recall is measured on partial documents while its competitor sees them whole.</desc><rect x="40" y="42" width="681" height="180" fill="#ffffff"/><rect x="60" y="56" width="520" height="42" rx="5" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><text x="320" y="82" fill="#1f2937" font-size="12" text-anchor="middle">candidate A sees the whole chunk</text><rect x="60" y="118" width="300" height="42" rx="5" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/><rect x="366" y="118" width="214" height="42" rx="5" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><text x="210" y="144" fill="#1f2937" font-size="12" text-anchor="middle">candidate B sees this much</text><text x="473" y="144" fill="#1f2937" font-size="12" text-anchor="middle">silently dropped</text><text x="380" y="204" fill="#1f2937" font-size="13" text-anchor="middle">Check the corpus percentile against every candidate&#8217;s limit before encoding</text></svg>
+<figcaption><b>No error, no warning, a different measurement.</b> Truncation is a property of the candidate rather than of the corpus, so the comparison is no longer between two models reading the same thing.</figcaption>
+</figure>
+
+**Throughput measured on a warm cache.** The first candidate encodes cold and the rest encode warm, which flatters everything after the first. Randomise the order or discard a warm-up batch.
+
+**Query encoding excluded from the throughput figure.** Corpus encoding dominates a rebuild and query encoding dominates the request path, and a candidate can be fast at one and slow at the other. Record both if latency matters to you.
+
+**Normalisation differing between candidates.** Some models return unit vectors and some do not, and comparing cosine similarity across the two without normalising measures the vector lengths. Normalise consistently before searching.
+
+## Frequently Asked Questions
+
+<details class="faq-item"><summary><span>How many queries does the evaluation set need?</span></summary><p>Thirty to fifty for a shortlisting decision, and more if you want to distinguish candidates separated by a point or two. The rare-name subset matters more than the total: ten genuinely hard name queries tell you more about how a candidate will behave on this corpus than a hundred paraphrase pairs. Build the set once and reuse it for every subsequent comparison, including the ones you have not thought of yet.</p></details>
+
+<details class="faq-item"><summary><span>Should the benchmark include the reranker?</span></summary><p>No, and this is a common mistake. A cross-encoder reranking the top candidates masks differences in the retrieval that produced them, so a weak embedding whose top fifty happens to contain the answer scores as well as a strong one. Measure the embedding alone at the depth the reranker consumes, then measure the whole pipeline separately as an end-to-end check.</p></details>
+
+<details class="faq-item"><summary><span>What if two candidates are genuinely tied?</span></summary><p>Take the smaller, faster, or more operationally boring one, in that order. A tie on quality means the decision falls to cost and risk, and a model with a smaller footprint, a permissive licence and a stable release history is worth more than a marginal recall difference you cannot reliably reproduce. Record the tie so the next comparison starts from it.</p></details>
+
+<details class="faq-item"><summary><span>How often should this be repeated?</span></summary><p>When something changes, not on a schedule. New model releases are frequent and mostly irrelevant to a corpus of technical prose; a substantial new document source or a tenfold corpus growth genuinely can reorder the ranking. Keeping the harness runnable is what makes the answer cheap when the question arises, which matters more than running it regularly.</p></details>
+
+<details class="faq-item"><summary><span>Where should the evaluation set live?</span></summary><p>In the repository, versioned with the code that uses it, and treated as an asset rather than as a test fixture. It outlives every model decision it informs, it is the thing that makes future comparisons cheap, and it is the first thing lost when it lives in someone&#8217;s notebook. Record which version of the set produced any published recall figure, because a set that has grown is not comparable to the one that came before it.</p></details>
+
+## Related
+
+- Up to the parent topic: [Spatial Embedding Models](/spatial-llm-architecture-core-concepts/spatial-embedding-models/)
+- [Choosing Vector Dimensionality for Spatial Retrieval](/spatial-llm-architecture-core-concepts/spatial-embedding-models/choosing-vector-dimensionality-for-spatial-retrieval/)
+- Related topic: [Hybrid Spatial and Keyword Retrieval](/geospatial-rag-pipelines/hybrid-spatial-keyword-retrieval/)
+- Related technique: [Indexing Spatial Embeddings with HNSW and Metadata Filters](/geospatial-rag-pipelines/spatial-vector-store-selection/indexing-spatial-embeddings-with-hnsw-and-metadata-filters/)

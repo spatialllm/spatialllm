@@ -28,6 +28,130 @@
     });
   }
 
+  // ---------- Theme toggle (light / dark, persisted) ----------
+  const THEME_KEY = "spatialllm:theme";
+  const themeBtn = document.querySelector("[data-theme-toggle]");
+
+  function currentTheme() {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit === "light" || explicit === "dark") return explicit;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  }
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    if (themeBtn) {
+      themeBtn.setAttribute(
+        "aria-label",
+        theme === "dark" ? "Switch to light theme" : "Switch to dark theme"
+      );
+    }
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#0c141f" : "#1668c4");
+  }
+
+  applyTheme(currentTheme());
+
+  if (themeBtn) {
+    themeBtn.addEventListener("click", () => {
+      const next = currentTheme() === "dark" ? "light" : "dark";
+      applyTheme(next);
+      try { localStorage.setItem(THEME_KEY, next); } catch (_) {}
+    });
+  }
+
+  // Follow the OS while the visitor has not made an explicit choice.
+  if (window.matchMedia) {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onSchemeChange = (e) => {
+      let stored = null;
+      try { stored = localStorage.getItem(THEME_KEY); } catch (_) {}
+      if (stored === "light" || stored === "dark") return;
+      applyTheme(e.matches ? "dark" : "light");
+    };
+    if (mq.addEventListener) mq.addEventListener("change", onSchemeChange);
+    else if (mq.addListener) mq.addListener(onSchemeChange);
+  }
+
+  // ---------- Diagram figures: download + full-screen ----------
+  // Progressive enhancement — the figure is complete without these controls.
+  const PAINT_PROPS = ["fill", "stroke", "stroke-width", "stroke-dasharray", "font-size", "font-weight", "font-family", "opacity", "text-anchor"];
+
+  function themedSvgSource(svg) {
+    // Bake the *rendered* colours into a standalone copy so a downloaded file
+    // matches the theme on screen (the page CSS is not part of the download).
+    const clone = svg.cloneNode(true);
+    const originals = svg.querySelectorAll("*");
+    const copies = clone.querySelectorAll("*");
+    for (let i = 0; i < originals.length && i < copies.length; i++) {
+      const cs = getComputedStyle(originals[i]);
+      for (const prop of PAINT_PROPS) {
+        const value = cs.getPropertyValue(prop);
+        if (value && value !== "none" && value !== "normal") copies[i].setAttribute(prop, value.trim());
+      }
+    }
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(clone);
+  }
+
+  function slugForFigure(fig, index) {
+    const title = fig.querySelector("svg title");
+    const base = (title ? title.textContent : "diagram-" + (index + 1)) || "diagram";
+    return base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "diagram";
+  }
+
+  document.querySelectorAll("figure.diagram").forEach((fig, index) => {
+    const svg = fig.querySelector("svg");
+    if (!svg) return;
+
+    const tools = document.createElement("div");
+    tools.className = "figure-tools";
+
+    const dl = document.createElement("button");
+    dl.type = "button";
+    dl.textContent = "Download SVG";
+    dl.addEventListener("click", () => {
+      try {
+        const blob = new Blob([themedSvgSource(svg)], { type: "image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = slugForFigure(fig, index) + ".svg";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      } catch (_) {
+        dl.textContent = "Download unavailable";
+        setTimeout(() => { dl.textContent = "Download SVG"; }, 1800);
+      }
+    });
+
+    const fs = document.createElement("button");
+    fs.type = "button";
+    fs.textContent = "Full screen";
+    fs.setAttribute("aria-expanded", "false");
+    const setExpanded = (on) => {
+      fig.classList.toggle("is-fullscreen", on);
+      fs.setAttribute("aria-expanded", String(on));
+      fs.textContent = on ? "Exit full screen" : "Full screen";
+    };
+    fs.addEventListener("click", () => setExpanded(!fig.classList.contains("is-fullscreen")));
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && fig.classList.contains("is-fullscreen")) {
+        setExpanded(false);
+        fs.focus();
+      }
+    });
+
+    tools.appendChild(dl);
+    tools.appendChild(fs);
+    fig.appendChild(tools);
+  });
+
   // ---------- Copy buttons for code blocks ----------
   document.querySelectorAll(".code-block").forEach((wrap) => {
     const btn = wrap.querySelector(".copy-btn");
@@ -108,6 +232,45 @@
     };
     document.head.appendChild(script);
   }
+
+  // ---------- Header nav panels (topics under each section) ----------
+  (function navPanels() {
+    const toggles = Array.from(document.querySelectorAll(".nav-panel-toggle"));
+    if (!toggles.length) return;
+
+    function panelFor(btn) {
+      return document.getElementById(btn.getAttribute("aria-controls"));
+    }
+    function close(btn) {
+      const panel = panelFor(btn);
+      if (panel) panel.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+    }
+    function closeAll(except) {
+      toggles.forEach((btn) => { if (btn !== except) close(btn); });
+    }
+
+    toggles.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const open = btn.getAttribute("aria-expanded") === "true";
+        closeAll(btn);
+        const panel = panelFor(btn);
+        if (panel) panel.hidden = open;
+        btn.setAttribute("aria-expanded", open ? "false" : "true");
+      });
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".nav-item")) closeAll(null);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      const open = toggles.find((b) => b.getAttribute("aria-expanded") === "true");
+      if (!open) return;
+      close(open);
+      open.focus();
+    });
+  })();
 
   // ---------- Smooth in-page scroll honouring sticky header ----------
   function getHeaderOffset() {

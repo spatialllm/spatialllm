@@ -109,6 +109,24 @@ module.exports = function (eleventyConfig) {
       .sort((a, b) => (a.data.order || 0) - (b.data.order || 0))
   );
 
+  // Every topic page (one level below a section).
+  eleventyConfig.addCollection("allTopics", (api) =>
+    api.getAll().filter((item) => {
+      const url = item.url || "";
+      if (!url || url === "/") return false;
+      return url.replace(/^\/|\/$/g, "").split("/").length === 2;
+    })
+  );
+
+  // Every in-depth guide (one level below a topic).
+  eleventyConfig.addCollection("guides", (api) =>
+    api.getAll().filter((item) => {
+      const url = item.url || "";
+      if (!url || url === "/") return false;
+      return url.replace(/^\/|\/$/g, "").split("/").length === 3;
+    })
+  );
+
   eleventyConfig.addCollection("articles", (api) =>
     api.getAll().filter((item) => {
       const layout = item.data.layout;
@@ -261,6 +279,84 @@ module.exports = function (eleventyConfig) {
     return content.replace(/\s*<h1\b[^>]*\bid="[^"]*"[^>]*>[\s\S]*?<\/h1>/, "");
   });
 
+  // Derive FAQPage / HowTo structured data from the rendered article body, so the
+  // schema can never drift from the prose a reader actually sees. FAQ entries come
+  // from the authored <details class="faq-item"> accordions; HowTo steps come from
+  // the H3 substeps under the implementation pipeline heading.
+  eleventyConfig.addTransform("contentSchema", function (content, outputPath) {
+    if (!outputPath || !outputPath.endsWith(".html")) return content;
+    if (!content.includes("</article>")) return content;
+
+    const stripTags = (s) =>
+      decodeEntities(
+        String(s)
+          .replace(/<[^>]+>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+      );
+
+    const blocks = [];
+
+    // ---- FAQPage ----
+    const faqs = [];
+    const faqRe = /<details\b[^>]*class="[^"]*faq-item[^"]*"[^>]*>([\s\S]*?)<\/details>/gi;
+    let m;
+    while ((m = faqRe.exec(content)) !== null) {
+      const inner = m[1];
+      const sum = /<summary\b[^>]*>([\s\S]*?)<\/summary>/i.exec(inner);
+      if (!sum) continue;
+      const question = stripTags(sum[1]);
+      const answer = stripTags(inner.slice(sum.index + sum[0].length));
+      if (question && answer) faqs.push({ question, answer });
+    }
+    if (faqs.length) {
+      blocks.push({
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        mainEntity: faqs.map((f) => ({
+          "@type": "Question",
+          name: f.question,
+          acceptedAnswer: { "@type": "Answer", text: f.answer },
+        })),
+      });
+    }
+
+    // ---- HowTo ----
+    const pipeline = /<h2\b[^>]*>\s*Step-by-Step Implementation Pipeline\s*<\/h2>([\s\S]*?)(?=<h2\b|<\/div>\s*<aside|<\/article>)/i.exec(
+      content
+    );
+    if (pipeline) {
+      const steps = [];
+      const stepRe = /<h3\b[^>]*>([\s\S]*?)<\/h3>([\s\S]*?)(?=<h3\b|$)/gi;
+      let s;
+      while ((s = stepRe.exec(pipeline[1])) !== null) {
+        const name = stripTags(s[1]);
+        const text = stripTags(s[2]).slice(0, 400);
+        if (name && text) steps.push({ name, text });
+      }
+      const h1 = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(content);
+      if (steps.length >= 2) {
+        blocks.push({
+          "@context": "https://schema.org",
+          "@type": "HowTo",
+          name: h1 ? stripTags(h1[1]) : "Implementation pipeline",
+          step: steps.map((st, i) => ({
+            "@type": "HowToStep",
+            position: i + 1,
+            name: st.name,
+            text: st.text,
+          })),
+        });
+      }
+    }
+
+    if (!blocks.length) return content;
+    const scripts = blocks
+      .map((b) => `<script type="application/ld+json">\n${JSON.stringify(b, null, 2)}\n</script>`)
+      .join("\n");
+    return content.replace("</body>", `${scripts}\n</body>`);
+  });
+
   // ---- Layout aliases ----
   eleventyConfig.addLayoutAlias("base", "base.njk");
   eleventyConfig.addLayoutAlias("overview", "overview.njk");
@@ -278,6 +374,17 @@ module.exports = function (eleventyConfig) {
     templateFormats: ["njk", "md", "html", "11ty.js"],
   };
 };
+
+function decodeEntities(s) {
+  return String(s)
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/&amp;/g, "&");
+}
 
 function escapeHtml(s) {
   return s

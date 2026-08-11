@@ -20,9 +20,9 @@ permalink: /
         <span class="btn-icon icon-route-bg" aria-hidden="true">{% set name = "routing" %}{% set size = 18 %}{% include "icon.njk" %}</span>
         Prompt Engineering &amp; Routing
       </a>
-      <a class="btn btn--ghost" href="#explore">
+      <a class="btn btn--ghost" href="#everything">
         <span class="btn-icon icon-globe-bg" aria-hidden="true">{% set name = "globe" %}{% set size = 18 %}{% include "icon.njk" %}</span>
-        Explore Articles
+        Browse every topic
       </a>
     </div>
   </div>
@@ -45,26 +45,19 @@ permalink: /
 
 <section class="section" id="explore">
   <div class="container container-wide">
-    <h2 class="section-title">Explore the topics</h2>
+    <h2 class="section-title">The three sections</h2>
     <ul class="card-grid">
-      {% for topic in collections.topics %}
+      {% for section in collections.topics %}
+      {% set kids = section | children(collections.articles) %}
       <li class="card card--featured">
-        <a href="{{ site.url }}{{ topic.url }}">
+        <a href="{{ site.url }}{{ section.url }}">
           <span class="card__icon" aria-hidden="true">
-            {% set name = topic.data.icon or "compass" %}{% set size = 28 %}{% include "icon.njk" %}
+            {% set name = section.data.icon or "compass" %}{% set size = 28 %}{% include "icon.njk" %}
           </span>
-          <span class="card__eyebrow">Topic {{ loop.index }}</span>
-          <span class="card__title">{{ topic.data.title }}</span>
-          <span class="card__desc">
-            {% if topic.url == "/spatial-llm-architecture-core-concepts/" %}
-              Validation-first ingestion, geometry tokenization, embeddings, evaluation, and deterministic fallbacks for the inference stack.
-            {% elif topic.url == "/geospatial-prompt-engineering-tool-routing/" %}
-              Prompt-to-spatial-SQL, async vs. sync workflows, function-calling schemas, agent orchestration, and error mapping.
-            {% else %}
-              Retrieval-augmented generation over geographic corpora: spatial vector stores, CRS resolution, chunking, and reranking.
-            {% endif %}
-          </span>
-          <span class="card__cta">Open topic <span aria-hidden="true">→</span></span>
+          <span class="card__eyebrow">{{ kids.length }} topics</span>
+          <span class="card__title">{{ section.data.title }}</span>
+          <span class="card__desc">{{ section.data.description }}</span>
+          <span class="card__cta">Open the section <span aria-hidden="true">→</span></span>
         </a>
       </li>
       {% endfor %}
@@ -76,14 +69,14 @@ permalink: /
   <div class="container container-wide">
     <div class="section__head">
       <h2 class="section-title">Start here</h2>
-      <p class="section__lede">New to spatial AI engineering? These pages cover the load-bearing decisions — get them right and the rest of the pipeline stays deterministic.</p>
+      <p class="section__lede">These six pages carry the decisions everything else depends on. Get them right and the rest of the pipeline stays predictable; get them wrong and the failures are the quiet kind that return fluent answers about the wrong place.</p>
     </div>
     <ul class="card-grid card-grid--three">
       <li class="card card--child">
         <a href="{{ site.url }}/spatial-llm-architecture-core-concepts/coordinate-reference-system-normalization/">
           <span class="card__eyebrow">Architecture</span>
           <span class="card__title">Coordinate Reference System Normalization</span>
-          <span class="card__desc">Normalize projections before tokenization so every downstream stage can assume one CRS.</span>
+          <span class="card__desc">Settle the reference frame once, at ingest, so no later stage has to guess what a distance means.</span>
           <span class="card__cta">Read <span aria-hidden="true">&rarr;</span></span>
         </a>
       </li>
@@ -91,31 +84,39 @@ permalink: /
         <a href="{{ site.url }}/spatial-llm-architecture-core-concepts/geometry-tokenization-strategies/">
           <span class="card__eyebrow">Architecture</span>
           <span class="card__title">Geometry Tokenization Strategies</span>
-          <span class="card__desc">Turn polygons and linestrings into token sequences a model can reason over without losing topology.</span>
+          <span class="card__desc">Describe shapes to a model without spending the context window on coordinate digits it cannot use.</span>
           <span class="card__cta">Read <span aria-hidden="true">&rarr;</span></span>
         </a>
       </li>
       <li class="card card--child">
         <a href="{{ site.url }}/geospatial-prompt-engineering-tool-routing/prompt-to-spatial-sql-generation/">
-          <span class="card__eyebrow">Prompt Engineering</span>
+          <span class="card__eyebrow">Prompt Design</span>
           <span class="card__title">Prompt-to-Spatial-SQL Generation</span>
-          <span class="card__desc">Generate schema-grounded PostGIS queries from natural language with validation gates.</span>
+          <span class="card__desc">Treat every generated statement as untrusted input and check it structurally before it reaches a database.</span>
           <span class="card__cta">Read <span aria-hidden="true">&rarr;</span></span>
         </a>
       </li>
       <li class="card card--child">
-        <a href="{{ site.url }}/geospatial-rag-pipelines/">
+        <a href="{{ site.url }}/geospatial-prompt-engineering-tool-routing/error-mapping-for-spatial-api-calls/">
+          <span class="card__eyebrow">Prompt Design</span>
+          <span class="card__title">Error Mapping for Spatial API Calls</span>
+          <span class="card__desc">Four failure classes decide what to retry, what to reroute and what a reader should ever be shown.</span>
+          <span class="card__cta">Read <span aria-hidden="true">&rarr;</span></span>
+        </a>
+      </li>
+      <li class="card card--child">
+        <a href="{{ site.url }}/geospatial-rag-pipelines/spatial-metadata-and-catalog-indexing/">
           <span class="card__eyebrow">RAG Pipelines</span>
-          <span class="card__title">Geospatial RAG Pipelines</span>
-          <span class="card__desc">Retrieve geographically correct context — right CRS, right region, intact geometries — before the model generates.</span>
+          <span class="card__title">Spatial Metadata and Catalog Indexing</span>
+          <span class="card__desc">Choose the dataset before searching its contents — the step that decides whether an answer can be right at all.</span>
           <span class="card__cta">Read <span aria-hidden="true">&rarr;</span></span>
         </a>
       </li>
       <li class="card card--child">
         <a href="{{ site.url }}/spatial-llm-architecture-core-concepts/evaluation-and-benchmarking-for-spatial-llms/">
           <span class="card__eyebrow">Architecture</span>
-          <span class="card__title">Evaluation &amp; Benchmarking for Spatial LLMs</span>
-          <span class="card__desc">Measure spatial IoU, coordinate hallucination, and topology violations before promoting a model.</span>
+          <span class="card__title">Evaluation and Benchmarking for Spatial LLMs</span>
+          <span class="card__desc">Measure overlap, invented coordinates and topology violations before anything is promoted.</span>
           <span class="card__cta">Read <span aria-hidden="true">&rarr;</span></span>
         </a>
       </li>
@@ -123,23 +124,27 @@ permalink: /
   </div>
 </section>
 
-<section class="section">
+<section class="section" id="everything">
   <div class="container container-wide">
-    <h2 class="section-title">What you&rsquo;ll find inside</h2>
-    <div class="card-grid card-grid--three">
-      {% for topic in collections.topics %}
-      {% set kids = topic | children(collections.articles) %}
-      <div class="card card--child">
-        <a href="{{ site.url }}{{ topic.url }}">
-          <span class="card__icon" aria-hidden="true">{% set name = topic.data.icon %}{% set size = 26 %}{% include "icon.njk" %}</span>
-          <span class="card__eyebrow">{{ kids.length }} articles</span>
-          <span class="card__title">{{ topic.data.title }}</span>
-          <ul class="article-list">
-            {% for k in kids %}
-            <li>{{ k.data.title }}</li>
-            {% endfor %}
-          </ul>
-        </a>
+    <div class="section__head">
+      <h2 class="section-title">Every topic on the site</h2>
+      <p class="section__lede">Three sections, {{ collections.allTopics.length }} topics and {{ collections.guides.length }} in-depth guides. Each topic covers one decision in a spatial system; each guide works through the implementation.</p>
+    </div>
+    <div class="section-index">
+      {% for section in collections.topics %}
+      {% set kids = section | children(collections.articles) %}
+      <div class="section-index__block">
+        <div class="section-index__head">
+          <span aria-hidden="true">{% set name = section.data.icon or "compass" %}{% set size = 24 %}{% include "icon.njk" %}</span>
+          <h3 class="section-index__title"><a href="{{ site.url }}{{ section.url }}">{{ section.data.title }}</a></h3>
+          <span class="section-index__count">{{ kids.length }} topics</span>
+        </div>
+        <p class="section-index__lede">{{ section.data.description }}</p>
+        <ul class="section-index__topics">
+          {% for kid in kids %}
+          <li><a href="{{ site.url }}{{ kid.url }}">{{ kid.data.title }}</a></li>
+          {% endfor %}
+        </ul>
       </div>
       {% endfor %}
     </div>

@@ -1,231 +1,322 @@
+---
+title: Topology Rule Enforcement via LLMs
+description: State the topological rules a dataset must satisfy, check generated geometry against them, and repair or reject with a tolerance chosen from the data's own accuracy.
+slug: topology-rule-enforcement-via-llms
+type: topic
+breadcrumb: Topology Rule Enforcement
+datePublished: 2025-04-22
+dateModified: 2026-08-11
+---
+
 # Topology Rule Enforcement via LLMs
 
-Large language models excel at translating natural language into structured spatial queries, but they lack inherent geometric reasoning. When LLMs generate coordinates, polygons, or spatial relationships, they frequently violate fundamental topological constraints such as self-intersection, sliver gaps, duplicate vertices, or invalid ring orientations. **Topology Rule Enforcement via LLMs** addresses this gap by embedding deterministic validation layers between generative outputs and downstream spatial systems. Within the broader [Geospatial Prompt Engineering & Tool Routing](https://www.spatialllm.org/geospatial-prompt-engineering-tool-routing/) paradigm, enforcing topology is not a post-processing afterthought but a mandatory routing checkpoint that guarantees spatial integrity before data enters analytical or operational pipelines.
+Geometry produced or edited by a model is individually plausible and collectively wrong. Parcels overlap by half a metre, a boundary that should follow a river diverges by three, and a set of zones that must tile an area leaves slivers between them. None of those is a validity failure — every shape is a legal polygon — and none of them is visible without rules that say what the collection is supposed to satisfy.
+
+This topic belongs to [geospatial prompt engineering and tool routing](/geospatial-prompt-engineering-tool-routing/) and complements [spatial reasoning and relation inference](/spatial-llm-architecture-core-concepts/spatial-reasoning-and-relation-inference/): that topic verifies claims a model makes about relations, this one enforces relations a dataset must have.
 
 <figure class="diagram">
-<svg viewBox="0 0 860 300" role="img" aria-labelledby="tre-t tre-d" xmlns="http://www.w3.org/2000/svg">
-  <title id="tre-t">Topology rule-enforcement pipeline</title>
-  <desc id="tre-d">Geometry intake, rule definition, a validation pass, error detection, and repair with enforcement run in sequence to produce a topologically valid geometry set for pipelines, QA, and publishing.</desc>
-  <defs>
-    <marker id="tre-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="#5b6471"/>
-    </marker>
-  </defs>
-  <g fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2">
-    <rect x="15" y="55" width="150" height="80" rx="8"/>
-    <rect x="183" y="55" width="150" height="80" rx="8"/>
-    <rect x="351" y="55" width="150" height="80" rx="8"/>
-    <rect x="519" y="55" width="150" height="80" rx="8"/>
-    <rect x="687" y="55" width="150" height="80" rx="8"/>
-  </g>
-  <g stroke="#5b6471" stroke-width="2" marker-end="url(#tre-arrow)">
-    <line x1="166" y1="95" x2="181" y2="95"/>
-    <line x1="334" y1="95" x2="349" y2="95"/>
-    <line x1="502" y1="95" x2="517" y2="95"/>
-    <line x1="670" y1="95" x2="685" y2="95"/>
-  </g>
-  <g stroke="#5b6471" stroke-width="2" marker-end="url(#tre-arrow)">
-    <line x1="90" y1="137" x2="90" y2="202"/>
-    <line x1="258" y1="137" x2="258" y2="202"/>
-    <line x1="426" y1="137" x2="426" y2="202"/>
-    <line x1="594" y1="137" x2="594" y2="202"/>
-    <line x1="762" y1="137" x2="762" y2="202"/>
-  </g>
-  <rect x="15" y="205" width="822" height="58" rx="8" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/>
-  <g fill="#1f2937" font-size="13" text-anchor="middle">
-    <text x="90" y="90"><tspan x="90" dy="0">Geometry</tspan><tspan x="90" dy="16">intake</tspan></text>
-    <text x="258" y="90"><tspan x="258" dy="0">Rule</tspan><tspan x="258" dy="16">definition</tspan></text>
-    <text x="426" y="90"><tspan x="426" dy="0">Validation</tspan><tspan x="426" dy="16">pass</tspan></text>
-    <text x="594" y="90"><tspan x="594" dy="0">Error</tspan><tspan x="594" dy="16">detection</tspan></text>
-    <text x="762" y="90"><tspan x="762" dy="0">Repair</tspan><tspan x="762" dy="16">&amp; enforce</tspan></text>
-  </g>
-  <text x="426" y="240" fill="#1f2937" font-size="15" font-weight="600" text-anchor="middle">Topologically valid geometry set</text>
-  <text x="426" y="287" fill="#5b6471" font-size="12" text-anchor="middle">Downstream: pipelines · QA · publishing</text>
-</svg>
+<svg viewBox="46 46 704 203" role="img" aria-labelledby="tre-valid-t tre-valid-d" xmlns="http://www.w3.org/2000/svg"><title id="tre-valid-t">Valid geometry that breaks a topological rule</title><desc id="tre-valid-d">Two parcels that overlap slightly and two that leave a sliver between them are both made of individually valid polygons, and only a rule about the collection detects either.</desc><rect x="46" y="46" width="704" height="203" fill="#ffffff"/><rect x="60" y="60" width="150" height="110" rx="4" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="196" y="60" width="150" height="110" rx="4" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2" fill-opacity="0.7"/><text x="203" y="200" fill="#1f2937" font-size="12.5" text-anchor="middle">overlap: both polygons valid</text><rect x="440" y="60" width="140" height="110" rx="4" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="596" y="60" width="140" height="110" rx="4" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><text x="588" y="200" fill="#1f2937" font-size="12.5" text-anchor="middle">sliver: both polygons valid</text><text x="390" y="232" fill="#5b6471" font-size="12" text-anchor="middle">Validity is a property of one shape; topology is a property of the collection</text></svg>
+<figcaption><b>Every shape here passes a validity check.</b> The failure is in the relationship between them, which no per-geometry test can see and which a rule about the collection detects immediately.</figcaption>
 </figure>
 
-## 1. Constraint-Driven Prompt Design & Schema Enforcement
+## Foundational Principles
 
-The foundation of reliable spatial generation lies in explicitly constraining the LLM's output schema. Freeform geometry requests consistently produce topologically invalid payloads. Instead, system prompts must declare invariant rules using [OGC Simple Features](https://www.ogc.org/standards/sfs) terminology. Specify mandatory properties: closed linear rings, explicit coordinate reference systems (CRS), minimum vertex spacing, and non-overlapping interiors for adjacent features. This structured approach aligns directly with [Prompt-to-Spatial-SQL Generation](https://www.spatialllm.org/geospatial-prompt-engineering-tool-routing/prompt-to-spatial-sql-generation/), where JSON or GeoJSON templates are paired with strict validation instructions.
+**Rules are declared, not implied.** A dataset either must tile without gaps, or must not overlap, or must share boundaries with a reference layer — and which of those applies is a statement about the data that belongs in configuration rather than in whoever last edited it.
 
-By embedding topological preconditions into the prompt's system directive, you establish a machine-readable contract that the LLM must satisfy. The following Pydantic schema enforces GeoJSON compliance, CRS declaration, and coordinate bounds before any geometric validation occurs.
+**Tolerance comes from the data's accuracy.** Exact topological equality is unachievable in data captured by different surveys, and a rule with no tolerance rejects everything. The tolerance is the capture accuracy of the less accurate source, and it is stated with every result.
+
+**Repair is offered, never silent.** A snap that closes a sliver moves vertices, and moving vertices in a regulated dataset is a decision somebody has to own. Detect, propose, and let the repair be applied deliberately.
+
+## Step-by-Step Implementation Pipeline
+
+### 1. Declare the rules a dataset must satisfy
+
+Four rules cover most real requirements, and expressing them as data makes them reviewable by the people who understand the dataset rather than only by the people who wrote the checker.
 
 ```python
-from pydantic import BaseModel, Field, field_validator
-from typing import Literal, List, Tuple
-import json
+import logging
+from dataclasses import dataclass
+from typing import Literal, Optional, Sequence
 
-class GeoJSONFeature(BaseModel):
-    type: Literal["Feature"] = "Feature"
-    crs: dict = Field(default_factory=lambda: {"type": "name", "properties": {"name": "EPSG:4326"}})
-    geometry: dict
-    properties: dict = Field(default_factory=dict)
+log = logging.getLogger("topology_rules")
 
-    @field_validator("geometry")
-    @classmethod
-    def validate_geometry_structure(cls, v: dict) -> dict:
-        valid_types = ("Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon")
-        if v.get("type") not in valid_types:
-            raise ValueError(f"Unsupported geometry type: {v.get('type')}")
-        if "coordinates" not in v:
-            raise ValueError("Missing 'coordinates' array in geometry")
-        return v
+RuleKind = Literal["no_overlap", "no_gaps", "covered_by", "boundary_shared"]
 
-    @field_validator("geometry")
-    @classmethod
-    def validate_coordinate_bounds(cls, v: dict) -> dict:
-        """Validates WGS84 bounds for top-level coordinate pairs."""
-        def check_bounds(c):
-            if isinstance(c, (int, float)):
-                return  # Scalars aren't coordinates by themselves
-            if (isinstance(c, (list, tuple)) and len(c) >= 2 and
-                    all(isinstance(x, (int, float)) for x in c[:2])):
-                x, y = c[0], c[1]
-                if not (-180 <= x <= 180 and -90 <= y <= 90):
-                    raise ValueError(f"Coordinate ({x}, {y}) exceeds WGS84 bounds")
-            elif isinstance(c, (list, tuple)):
-                for sub in c:
-                    check_bounds(sub)
-        check_bounds(v.get("coordinates", []))
-        return v
 
-# Example LLM payload validation
-llm_payload = {
-    "type": "Feature",
-    "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
-    "geometry": {
-        "type": "Polygon",
-        "coordinates": [[[-74.0, 40.7], [-73.9, 40.7], [-73.9, 40.8], [-74.0, 40.8], [-74.0, 40.7]]]
-    },
-    "properties": {"name": "Manhattan Block"}
+@dataclass(frozen=True)
+class Rule:
+    kind: RuleKind
+    layer: str
+    reference: Optional[str] = None      # for covered_by and boundary_shared
+    tolerance_m: float = 0.0
+    severity: Literal["error", "warning"] = "error"
+
+
+@dataclass(frozen=True)
+class Violation:
+    rule: Rule
+    feature_ids: tuple[str, ...]
+    measure_m: float                     # how far the rule is broken, in metres
+    detail: str
+```
+
+Recording the measure rather than a boolean is what makes a violation triageable. A twelve-centimetre overlap between parcels captured to a metre is noise; a four-metre overlap is an error, and both fail the same rule.
+
+### 2. Choose the tolerance from the sources
+
+The tolerance is not a tuning parameter. It comes from the stated accuracy of the data, and where two layers differ it comes from the worse of them.
+
+```python
+def tolerance_for(layer_accuracy_m: float, reference_accuracy_m: Optional[float] = None,
+                  floor_m: float = 0.01) -> float:
+    """Tolerance is the worse of the two capture accuracies, never less than the floor."""
+    candidates = [a for a in (layer_accuracy_m, reference_accuracy_m) if a is not None]
+    if not candidates:
+        log.info("no stated accuracy for this layer; using the floor tolerance")
+        return floor_m
+    return max(floor_m, max(candidates))
+```
+
+Deriving it this way makes every result defensible. "Adjacent within the stated accuracy of both sources" is a claim you can put in front of a surveyor; "adjacent within half a metre because that made the test pass" is not. Choosing a snapping tolerance that preserves topology rather than destroying it is developed in [choosing a snapping tolerance that preserves topology](/geospatial-prompt-engineering-tool-routing/topology-rule-enforcement-via-llms/choosing-a-snapping-tolerance-that-preserves-topology/).
+
+### 3. Check overlap and gaps as area measures
+
+Both rules reduce to an area computed in a metric projection, which makes them comparable to each other and to a tolerance expressed in metres.
+
+```python
+def check_no_overlap(features, to_metric, tolerance_m: float) -> list[Violation]:
+    """Any pairwise intersection with area beyond the tolerance is a violation."""
+    violations = []
+    projected = [(f["id"], to_metric(f["geom"])) for f in features]
+    index = build_index(projected)                       # a spatial index, not a nested loop
+    for fid, geom in projected:
+        for other_id, other in index.query(geom.bounds):
+            if other_id <= fid:
+                continue                                 # each pair once
+            try:
+                shared = geom.intersection(other)
+            except Exception as exc:
+                log.warning("overlay failed for %s/%s: %s", fid, other_id, exc)
+                continue
+            if shared.is_empty or shared.area <= tolerance_m ** 2:
+                continue
+            violations.append(Violation(
+                Rule("no_overlap", "", tolerance_m=tolerance_m),
+                (fid, other_id), round(shared.area ** 0.5, 3),
+                f"overlap of {shared.area:.2f} m²"))
+    return violations
+```
+
+Using a spatial index rather than a nested loop is the difference between a check that runs on a thousand features and one that runs on a million. The naive form is quadratic and looks perfectly reasonable until the dataset grows.
+
+### 4. Detect slivers as gaps between neighbours
+
+A gap rule asks whether a set of polygons tiles a region, and the useful output is the gaps themselves rather than a pass or fail.
+
+```python
+def check_no_gaps(features, boundary, to_metric, tolerance_m: float) -> list[Violation]:
+    """Everything inside the boundary must be covered; report the uncovered parts."""
+    from shapely.ops import unary_union
+    covered = unary_union([to_metric(f["geom"]) for f in features])
+    gaps = to_metric(boundary).difference(covered)
+    if gaps.is_empty:
+        return []
+    parts = list(getattr(gaps, "geoms", [gaps]))
+    violations = []
+    for part in parts:
+        if part.area <= tolerance_m ** 2:
+            continue                                     # within capture accuracy
+        violations.append(Violation(
+            Rule("no_gaps", "", tolerance_m=tolerance_m), (),
+            round(part.area ** 0.5, 3), f"uncovered area of {part.area:.2f} m²"))
+    return violations
+```
+
+<figure class="diagram">
+<svg viewBox="56 9 600 224" role="img" aria-labelledby="tre-tol-t tre-tol-d" xmlns="http://www.w3.org/2000/svg"><title id="tre-tol-t">Tolerance separating capture noise from real violations</title><desc id="tre-tol-d">Overlaps below the capture accuracy of the sources are noise and pass; overlaps above it are genuine violations, and the boundary between them is the stated accuracy rather than a chosen number.</desc><rect x="56" y="9" width="600" height="224" fill="#ffffff"/><text x="390" y="34" fill="#5b6471" font-size="13" text-anchor="middle">Overlap size against the stated capture accuracy of one metre</text><g fill="#e4f5ec" stroke="#12805c" stroke-width="2"><rect x="70" y="96" width="70" height="52" rx="5"/><rect x="156" y="96" width="70" height="52" rx="5"/><rect x="242" y="96" width="70" height="52" rx="5"/></g><g fill="#fdeaee" stroke="#b3324f" stroke-width="2"><rect x="400" y="96" width="70" height="52" rx="5"/><rect x="486" y="96" width="70" height="52" rx="5"/><rect x="572" y="96" width="70" height="52" rx="5"/></g><rect x="340" y="76" width="6" height="92" rx="3" fill="#c46a3d"/><text x="343" y="192" fill="#c46a3d" font-size="12" text-anchor="middle">1 m</text><g fill="#5b6471" font-size="12" text-anchor="middle"><text x="190" y="216">capture noise: pass</text><text x="520" y="216">real violations: report</text></g></svg>
+<figcaption><b>The line is set by the data, not by the checker.</b> A tolerance chosen to make a particular dataset pass is a tolerance that will accept a genuine error in the next one, which is why deriving it from stated accuracy is worth the small effort.</figcaption>
+</figure>
+
+### 5. Propose a repair rather than applying one
+
+For each violation there is usually an obvious repair, and proposing it — with the vertex movement it implies — is what lets a person or a policy decide.
+
+```python
+@dataclass(frozen=True)
+class Repair:
+    violation: Violation
+    action: Literal["snap", "trim", "fill", "none"]
+    max_movement_m: float
+    note: str
+
+
+def propose(violation: Violation, tolerance_m: float) -> Repair:
+    """Suggest a repair and state how far it would move geometry."""
+    if violation.rule.kind == "no_overlap":
+        if violation.measure_m <= tolerance_m * 2:
+            return Repair(violation, "snap", violation.measure_m,
+                          "snap the shared boundary; movement within twice the tolerance")
+        return Repair(violation, "none", 0.0,
+                      "overlap is too large to be a capture artefact; investigate the source")
+    if violation.rule.kind == "no_gaps":
+        return Repair(violation, "fill", violation.measure_m,
+                      "assign the gap to the neighbour with the longest shared boundary")
+    return Repair(violation, "none", 0.0, "no automatic repair for this rule")
+```
+
+Refusing to propose a repair for a large overlap is the important behaviour. A four-metre overlap between parcels is not a snapping problem; it is two sources disagreeing about where a boundary is, and snapping it away destroys the evidence of that disagreement. The snapping and noding mechanics are covered in [snapping and noding LLM-generated geometries](/geospatial-prompt-engineering-tool-routing/topology-rule-enforcement-via-llms/snapping-and-noding-llm-generated-geometries/).
+
+### 6. Apply repairs as a batch, with a record
+
+When repairs are applied, they are applied together, recorded, and re-checked — because snapping one boundary frequently creates a violation somewhere else.
+
+```python
+def apply_repairs(features, repairs: Sequence[Repair], apply, recheck) -> dict:
+    """Apply, re-check, and report what changed. Repairs can create new violations."""
+    applied = [r for r in repairs if r.action != "none"]
+    if not applied:
+        return {"applied": 0, "remaining": len(repairs), "new_violations": []}
+    updated = apply(features, applied)
+    after = recheck(updated)
+    log.info("applied %d repair(s); %d violation(s) remain", len(applied), len(after))
+    return {"applied": len(applied), "updated": updated,
+            "remaining": len(after), "new_violations": after,
+            "max_movement_m": max(r.max_movement_m for r in applied)}
+```
+
+### 7. Enforce rules on generated geometry before it is stored
+
+Geometry a model produced or edited goes through the same rules as anything else, and the check runs before the write rather than after. A violation found after storage is a data-quality task; found before, it is a rejected tool call.
+
+```python
+def gate_generated(features, rules: Sequence[Rule], check_all) -> tuple[bool, list[Violation]]:
+    """Generated geometry must satisfy the same rules as everything else."""
+    violations = [v for v in check_all(features, rules) if v.rule.severity == "error"]
+    if violations:
+        worst = max(violations, key=lambda v: v.measure_m)
+        log.info("rejecting generated geometry: %s (worst %.2f m)",
+                 worst.detail, worst.measure_m)
+    return (not violations), violations
+```
+
+### 8. Report violations in a form a person can work through
+
+A list of a thousand violations is unusable; the same list grouped by rule, sorted by measure and capped is a work queue. Reporting the distribution alongside the top offenders is what lets someone judge whether the dataset has a systematic problem or a handful of bad features.
+
+```python
+def violation_report(violations: Sequence[Violation], top: int = 20) -> dict:
+    by_rule: dict[str, list[Violation]] = {}
+    for v in violations:
+        by_rule.setdefault(v.rule.kind, []).append(v)
+    return {
+        kind: {
+            "count": len(items),
+            "max_m": round(max(i.measure_m for i in items), 3),
+            "median_m": round(sorted(i.measure_m for i in items)[len(items) // 2], 3),
+            "worst": [i.feature_ids for i in
+                      sorted(items, key=lambda i: -i.measure_m)[:top]],
+        }
+        for kind, items in sorted(by_rule.items())
+    }
+```
+
+### 9. Keep a rule set per dataset, not per system
+
+Rules belong to a dataset, and a system serving several datasets needs several rule sets. A single global set produces either rules that do not apply — a no-gaps rule against a point layer — or rules so weak they check nothing.
+
+```python
+RULE_SETS = {
+    "parcels": (
+        Rule("no_overlap", "parcels", tolerance_m=0.5),
+        Rule("covered_by", "parcels", reference="districts", tolerance_m=0.5),
+    ),
+    "zoning": (
+        Rule("no_overlap", "zoning", tolerance_m=1.0),
+        Rule("no_gaps", "zoning", reference="district_boundary", tolerance_m=1.0),
+    ),
 }
 
-validated = GeoJSONFeature(**llm_payload)
-print("Schema validation passed:", validated.geometry["type"])
+
+def rules_for(layer: str) -> Sequence[Rule]:
+    rules = RULE_SETS.get(layer)
+    if not rules:
+        log.info("no topology rules declared for layer %r", layer)
+        return ()
+    return rules
 ```
 
-## 2. Deterministic Engine Routing & Dispatch Architecture
+The log line on a missing rule set matters more than it looks. A layer with no rules is not necessarily wrong — many layers genuinely have no topological requirements — but a layer that acquired rules and then lost them in a configuration edit looks identical, and the message is the only thing that distinguishes them.
 
-Once the LLM returns a geometry payload, the pipeline must route it to the appropriate spatial engine for validation. Production systems typically employ a dual-layer strategy: lightweight in-memory validation via `shapely` for rapid iteration, and heavy-duty relational validation via PostGIS for enterprise-scale datasets. Implementing [GeoPandas & PostGIS Tool Routing](https://www.spatialllm.org/geospatial-prompt-engineering-tool-routing/geopandas-postgis-tool-routing/) requires a dispatcher that evaluates payload complexity, coordinate count, and latency SLAs.
+### 10. Decide who owns a violation
 
-The routing layer should parse the LLM output, validate JSON/GeoJSON structure, and branch execution paths based on feature count and topology complexity. Small batches (<100 features) route to Python for immediate feedback, while multi-polygon networks or topology-heavy administrative boundaries trigger asynchronous PostGIS transactions. The dispatcher must also capture execution metadata, including validation status codes and geometry complexity metrics, to inform downstream retry logic.
+A violation is a finding about data, and data has an owner. Routing violations to whoever maintains the source, with the feature identifiers and the measure, is what turns a report into a fix; routing them all to whoever built the checker turns it into a backlog.
 
 ```python
-import shapely
-from shapely.geometry import shape
-from typing import Dict, Any, Tuple
-
-def route_validation_engine(feature: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-    """Routes geometry payload to appropriate validation engine based on complexity."""
-    geom = shape(feature["geometry"])
-
-    # Count coordinates across geometry types
-    if hasattr(geom, "coords"):
-        coord_count = len(list(geom.coords))
-    elif hasattr(geom, "geoms"):
-        coord_count = sum(
-            len(list(part.exterior.coords)) if hasattr(part, "exterior") else len(list(part.coords))
-            for part in geom.geoms
-        )
-    elif hasattr(geom, "exterior"):
-        coord_count = len(list(geom.exterior.coords))
-    else:
-        coord_count = 1
-
-    MAX_MEMORY_COORDS = 5000
-    IS_POLYGON = geom.geom_type in ("Polygon", "MultiPolygon")
-
-    metadata = {
-        "geom_type": geom.geom_type,
-        "coord_count": coord_count,
-        "is_valid": geom.is_valid,
-        "crs": feature.get("crs", {}).get("properties", {}).get("name", "unknown")
-    }
-
-    if coord_count >= MAX_MEMORY_COORDS and IS_POLYGON:
-        return "postgis_async", metadata
-    else:
-        return "shapely_sync", metadata
-
-# Dispatch example
-route, meta = route_validation_engine(validated.model_dump())
-print(f"Routed to: {route} | Complexity: {meta['coord_count']} coords")
+def route_violations(violations: Sequence[Violation], owners: dict[str, str]) -> dict:
+    """Group violations by the owner of the layer they concern."""
+    routed: dict[str, list[Violation]] = {}
+    for v in violations:
+        owner = owners.get(v.rule.layer, "unassigned")
+        routed.setdefault(owner, []).append(v)
+    if "unassigned" in routed:
+        log.warning("%d violation(s) concern layers with no recorded owner",
+                    len(routed["unassigned"]))
+    return routed
 ```
 
-## 3. Explicit Validation, CRS Normalization & Error Mapping
+An unassigned bucket that keeps growing is itself the finding. It means a layer entered the system without anyone taking responsibility for its quality, and the topology check has surfaced that rather than the geometry problem it was looking for.
 
-Validation must be deterministic and explicitly map failures to actionable error codes. LLMs frequently generate self-intersecting rings, unclosed polygons, or geometries with incorrect winding order. The validation layer must normalize CRS, enforce ring closure, and apply topological repair where safe. For detailed algorithmic strategies on handling these edge cases, see [Enforcing Topological Rules in LLM-Generated Geometries](https://www.spatialllm.org/geospatial-prompt-engineering-tool-routing/topology-rule-enforcement-via-llms/enforcing-topological-rules-in-llm-generated-geometries/).
+## Operating This Stage Over Time
 
-The following pipeline demonstrates explicit validation, CRS enforcement, and structured error mapping. It uses `shapely.make_valid` for safe repair and captures precise failure reasons for human-in-the-loop or automated retry workflows.
+Rules accumulate and then stop being read. A dataset acquires a rule for each problem someone once had, and after two years the configuration contains rules that no longer apply to data that has since been replaced. Reviewing the rule set against the violations it actually produces — a rule that has never fired in a year is either unnecessary or broken — keeps it meaningful.
 
-```python
-from shapely.validation import make_valid
-from shapely.geometry import shape, Polygon
-from shapely.ops import transform
-import pyproj
-import shapely
+Tolerances drift in the dangerous direction. Each time a check produces too many violations, the tolerance is raised slightly, and each raise is justified by that day's data. Deriving tolerance from stated accuracy rather than from a constant removes most of this pressure, and recording the derivation makes a manual override visible when it happens.
 
-class TopologyError(Exception):
-    def __init__(self, code: str, message: str, geometry_hint: str):
-        self.code = code
-        self.message = message
-        self.geometry_hint = geometry_hint
-        super().__init__(self.message)
+The check's cost grows quadratically with feature count unless the index is doing its job. A check that ran in seconds against a hundred thousand features and takes an hour against a million usually means the index has stopped being used — a bounds computation moved inside the loop, or the index is rebuilt per query. Tracking check duration against feature count makes that obvious rather than mysterious.
 
-def enforce_topology(feature: Dict[str, Any]) -> Dict[str, Any]:
-    """Validates, repairs, and normalizes LLM-generated geometry."""
-    repaired = False
-    try:
-        geom = shape(feature["geometry"])
+Finally, watch the ratio of proposed to applied repairs. A system where every proposal is applied has a repair step that is effectively automatic, which may be intended and should be a decision; one where none are applied has a proposal step nobody trusts, which is worth understanding before it is removed.
 
-        # 1. CRS Enforcement: Ensure WGS84 or project to target
-        target_crs = "EPSG:4326"
-        declared_crs = feature.get("crs", {}).get("properties", {}).get("name", "EPSG:4326")
-        if declared_crs != target_crs:
-            project = pyproj.Transformer.from_crs(declared_crs, target_crs, always_xy=True).transform
-            geom = transform(project, geom)
-            feature["crs"] = {"type": "name", "properties": {"name": target_crs}}
+## Failure Modes & Root Causes
 
-        # 2. Topology Validation & Repair
-        if not geom.is_valid:
-            fixed = make_valid(geom)
-            if not fixed.is_valid:
-                raise TopologyError(
-                    "ERR_TOPO_UNRECOVERABLE",
-                    "Geometry contains unrecoverable topological defects.",
-                    str(geom.wkt[:200])
-                )
-            geom = fixed
-            repaired = True
+**The silent snap.** Vertices move to satisfy a rule and nobody records it, so the stored geometry differs from the source with no trace. Root cause: repair applied inside the check. Mitigation: propose and apply as separate steps, with the movement recorded.
 
-        # 3. Ring Orientation & Closure Enforcement (OGC SFS)
-        if geom.geom_type == "Polygon":
-            if not geom.exterior.is_ring:
-                raise TopologyError("ERR_RING_UNCLOSED", "Exterior ring is not closed.", str(geom.wkt[:200]))
+**The tolerance that swallowed a real error.** A raised tolerance passes a four-metre disagreement as capture noise. Root cause: tolerance treated as a tuning parameter. Mitigation: derive it from stated accuracy; require an explicit override with a reason.
 
-        # 4. Sliver/Minimum Area Check
-        if geom.area < 1e-10:
-            raise TopologyError("ERR_SLIVER_GEOMETRY", "Geometry area below minimum threshold.", str(geom.wkt[:200]))
+**The quadratic check.** A rule that ran fine on a small dataset takes hours on a large one. Root cause: pairwise comparison without a spatial index. Mitigation: index-backed candidate selection, with duration tracked against feature count.
 
-        # Update payload
-        feature["geometry"] = shapely.to_geojson(geom)
-        feature["_validation"] = {"status": "PASS", "engine": "shapely", "repaired": repaired}
-        return feature
+**The repair that broke something else.** Snapping one boundary opened a gap against a third feature. Root cause: repairs applied without re-checking. Mitigation: batch, apply, re-check, and report new violations.
 
-    except TopologyError as e:
-        feature["_validation"] = {"status": "FAIL", "code": e.code, "message": e.message, "hint": e.geometry_hint}
-        return feature
+## Production Validation Protocols
 
-# Execute validation
-result = enforce_topology(validated.model_dump())
-print("Validation Result:", result["_validation"])
-```
+1. **Rule-coverage assertion.** Assert every layer that should have rules has at least one, and that every rule names a layer that exists.
+2. **Tolerance-provenance test.** Assert every tolerance is derived from a stated accuracy or carries an explicit override with a reason.
+3. **Index-use test.** Assert the overlap check uses a spatial index, using a fixture large enough that a quadratic implementation would time out.
+4. **Repair-record test.** Assert every applied repair records its maximum vertex movement.
+5. **Re-check assertion.** Assert repairs are followed by a re-check and that new violations are reported rather than swallowed.
+6. **Generated-geometry gate.** Assert model-produced geometry is checked before storage, with a fixture that violates a rule.
 
-## 4. Pipeline Integration & Production Considerations
+<figure class="diagram">
+<svg viewBox="46 46 699 172" role="img" aria-labelledby="tre-cascade-t tre-cascade-d" xmlns="http://www.w3.org/2000/svg"><title id="tre-cascade-t">A repair creating a new violation</title><desc id="tre-cascade-d">Snapping two parcels together to close an overlap moves a shared vertex, which opens a gap against a third parcel that was previously compliant.</desc><rect x="46" y="46" width="699" height="172" fill="#ffffff"/><rect x="60" y="60" width="110" height="110" rx="4" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="170" y="60" width="110" height="110" rx="4" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/><rect x="280" y="60" width="70" height="110" rx="4" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><text x="205" y="200" fill="#1f2937" font-size="12.5" text-anchor="middle">before: one overlap</text><rect x="420" y="60" width="110" height="110" rx="4" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="530" y="60" width="110" height="110" rx="4" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="660" y="60" width="70" height="110" rx="4" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><text x="580" y="200" fill="#1f2937" font-size="12.5" text-anchor="middle">after: the overlap closed, a gap opened</text></svg>
+<figcaption><b>Repairs are not local.</b> A shared vertex participates in several relationships, and moving it to satisfy one of them changes the others — which is why a repair pass is followed by a full re-check rather than a spot verification.</figcaption>
+</figure>
 
-Topology rule enforcement must be treated as a synchronous gate in LLM-assisted geoprocessing workflows. When validation fails, the structured error payload should trigger one of three routing paths:
-1. **Automated Retry:** Inject the error code and geometry hint back into the LLM context window with a corrective system directive (e.g., `"ERR_RING_UNCLOSED: Ensure first and last coordinates match exactly."`).
-2. **Fallback Engine:** Route to PostGIS for `ST_IsValid` and `ST_MakeValid` execution, leveraging database-level topology rules for complex multi-geometry networks.
-3. **Human Review Queue:** Flag payloads with `ERR_TOPO_UNRECOVERABLE` or `ERR_SLIVER_GEOMETRY` for spatial data scientist review, preserving the original LLM output alongside the validation trace.
+## Frequently Asked Questions
 
-Monitoring should track validation pass/fail rates, average repair latency, and CRS mismatch frequency. These metrics directly inform prompt refinement cycles and help calibrate temperature/sampling parameters for spatial generation tasks. By treating topology enforcement as a first-class routing checkpoint rather than a cleanup script, platform teams guarantee that LLM-generated spatial data remains interoperable, queryable, and compliant with enterprise GIS standards from ingestion to visualization.
+<details class="faq-item"><summary><span>Should a model ever be asked to repair topology?</span></summary><p>To describe the problem, yes; to move the vertices, no. Snapping and noding are deterministic geometric operations with well-defined semantics, and a model performing them by editing coordinates will produce output that is plausible and subtly wrong in ways no reader can check. Where a model helps is in explaining a violation and in choosing between proposed repairs, which is a judgement rather than a computation.</p></details>
+
+<details class="faq-item"><summary><span>What tolerance should apply when accuracy is not stated?</span></summary><p>A small floor, and a note that the tolerance is unfounded. Inventing a plausible accuracy figure is worse than using a conservative floor, because it produces results that look derived. Where the missing figure matters — a regulated boundary dataset, say — the honest answer is that the check cannot be run defensibly until the accuracy is established.</p></details>
+
+<details class="faq-item"><summary><span>How should rules interact with the validity checks at ingestion?</span></summary><p>Sequentially and separately. Validity is a per-geometry property checked at the ingestion gate; topology is a collection property checked after a dataset is assembled. Running them together conflates two very different failure modes, and a report that mixes "this polygon self-intersects" with "these two parcels overlap" is harder to act on than two reports.</p></details>
+
+<details class="faq-item"><summary><span>Can rules be enforced incrementally as features are edited?</span></summary><p>Yes for the local rules — overlap and shared boundary can be checked against a feature's neighbours cheaply — and no for the global ones, since a gap rule is a statement about a whole region. The practical arrangement is incremental checks on edit for what is affordable, plus a full pass on a schedule, with the full pass being the authority.</p></details>
+
+<details class="faq-item"><summary><span>What should happen when a dataset has too many violations to fix?</span></summary><p>Report the distribution and stop, rather than proposing thousands of repairs. A dataset with fifty thousand violations has a systematic problem — a frame mismatch, a wrong reference layer, a bad import — and the fix is upstream. The median and maximum measures are what identify it: violations clustered near the tolerance are capture noise, and violations clustered at ten metres are a misalignment.</p></details>
+
+## Related
+
+- Up to the section overview: [Geospatial Prompt Engineering and Tool Routing](/geospatial-prompt-engineering-tool-routing/)
+- Technique: [Enforcing Topological Rules in LLM-Generated Geometries](/geospatial-prompt-engineering-tool-routing/topology-rule-enforcement-via-llms/enforcing-topological-rules-in-llm-generated-geometries/)
+- Technique: [Snapping and Noding LLM-Generated Geometries](/geospatial-prompt-engineering-tool-routing/topology-rule-enforcement-via-llms/snapping-and-noding-llm-generated-geometries/)
+- Technique: [Choosing a Snapping Tolerance That Preserves Topology](/geospatial-prompt-engineering-tool-routing/topology-rule-enforcement-via-llms/choosing-a-snapping-tolerance-that-preserves-topology/)
+- Related topic: [Spatial Reasoning and Relation Inference](/spatial-llm-architecture-core-concepts/spatial-reasoning-and-relation-inference/)
+- Peer topic: [LLM-Assisted Geoprocessing Pipelines](/geospatial-prompt-engineering-tool-routing/llm-assisted-geoprocessing-pipelines/)

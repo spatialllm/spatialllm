@@ -1,241 +1,315 @@
+---
+title: LLM-Assisted Geoprocessing Pipelines
+description: Turn a natural-language analysis request into a validated chain of geoprocessing steps, with every step's output checked before the next one consumes it.
+slug: llm-assisted-geoprocessing-pipelines
+type: topic
+breadcrumb: Geoprocessing Pipelines
+datePublished: 2025-03-25
+dateModified: 2026-08-11
+---
+
 # LLM-Assisted Geoprocessing Pipelines
 
-LLM-Assisted Geoprocessing Pipelines represent a structural evolution in spatial data engineering, shifting from static, hard-coded ETL scripts to dynamic, intent-driven execution graphs. For AI/ML engineers, spatial data scientists, Python GIS developers, and platform teams, integrating generative models into production spatial workflows requires rigorous prompt engineering, deterministic tool routing, and explicit validation layers. This architecture operates within the broader [Geospatial Prompt Engineering & Tool Routing](https://www.spatialllm.org/geospatial-prompt-engineering-tool-routing/) paradigm, where natural language intent is translated into executable spatial operations with guaranteed reproducibility and strict spatial integrity.
+"Which residential parcels are within 200 metres of a watercourse and outside the flood zone" is one sentence and four geoprocessing operations, each of which can succeed while producing something the next step cannot use. Planning that chain, and validating between its steps, is what separates an analysis you can defend from a sequence of plausible operations ending in a number.
 
-Unlike traditional tabular pipelines, spatial workflows introduce compounding failure modes: coordinate reference system (CRS) misalignment, topology violations, precision drift, and unbounded memory consumption during geometric operations. A production-ready LLM-assisted pipeline must enforce schema boundaries at ingestion, route operations deterministically based on computational complexity, and map spatial exceptions to a standardized error taxonomy before execution reaches the data layer.
+This topic belongs to [geospatial prompt engineering and tool routing](/geospatial-prompt-engineering-tool-routing/) and sits above [GeoPandas and PostGIS tool routing](/geospatial-prompt-engineering-tool-routing/geopandas-postgis-tool-routing/), which decides where each planned step runs. Chains long enough to need checkpointing belong to [multi-step spatial agent orchestration](/geospatial-prompt-engineering-tool-routing/multi-step-spatial-agent-orchestration/).
 
 <figure class="diagram">
-<svg viewBox="0 0 860 300" role="img" aria-labelledby="lap-t lap-d" xmlns="http://www.w3.org/2000/svg">
-  <title id="lap-t">LLM-assisted geoprocessing pipeline</title>
-  <desc id="lap-d">Prompt spec, step planning, tool invocation, geometry validation, and pipeline output run in sequence to deliver LLM-orchestrated geoprocessing with tool routing, topology checks, and QA.</desc>
-  <defs>
-    <marker id="lap-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="#5b6471"/>
-    </marker>
-  </defs>
-  <g fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2">
-    <rect x="15" y="55" width="150" height="80" rx="8"/>
-    <rect x="183" y="55" width="150" height="80" rx="8"/>
-    <rect x="351" y="55" width="150" height="80" rx="8"/>
-    <rect x="519" y="55" width="150" height="80" rx="8"/>
-    <rect x="687" y="55" width="150" height="80" rx="8"/>
-  </g>
-  <g stroke="#5b6471" stroke-width="2" marker-end="url(#lap-arrow)">
-    <line x1="166" y1="95" x2="181" y2="95"/>
-    <line x1="334" y1="95" x2="349" y2="95"/>
-    <line x1="502" y1="95" x2="517" y2="95"/>
-    <line x1="670" y1="95" x2="685" y2="95"/>
-  </g>
-  <g stroke="#5b6471" stroke-width="2" marker-end="url(#lap-arrow)">
-    <line x1="90" y1="137" x2="90" y2="202"/>
-    <line x1="258" y1="137" x2="258" y2="202"/>
-    <line x1="426" y1="137" x2="426" y2="202"/>
-    <line x1="594" y1="137" x2="594" y2="202"/>
-    <line x1="762" y1="137" x2="762" y2="202"/>
-  </g>
-  <rect x="15" y="205" width="822" height="58" rx="8" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/>
-  <g fill="#1f2937" font-size="13" text-anchor="middle">
-    <text x="90" y="90"><tspan x="90" dy="0">Prompt</tspan><tspan x="90" dy="16">spec</tspan></text>
-    <text x="258" y="90"><tspan x="258" dy="0">Step</tspan><tspan x="258" dy="16">planning</tspan></text>
-    <text x="426" y="90"><tspan x="426" dy="0">Tool</tspan><tspan x="426" dy="16">invocation</tspan></text>
-    <text x="594" y="90"><tspan x="594" dy="0">Geometry</tspan><tspan x="594" dy="16">validation</tspan></text>
-    <text x="762" y="90"><tspan x="762" dy="0">Pipeline</tspan><tspan x="762" dy="16">output</tspan></text>
-  </g>
-  <text x="426" y="240" fill="#1f2937" font-size="15" font-weight="600" text-anchor="middle">LLM-orchestrated geoprocessing</text>
-  <text x="426" y="287" fill="#5b6471" font-size="12" text-anchor="middle">Downstream: tool routing · topology checks · QA</text>
-</svg>
+<svg viewBox="6 42 786 180" role="img" aria-labelledby="lgp-chain-t lgp-chain-d" xmlns="http://www.w3.org/2000/svg"><title id="lgp-chain-t">One sentence decomposed into four validated steps</title><desc id="lgp-chain-d">Selecting residential parcels, buffering watercourses, intersecting the two and subtracting the flood zone, with a validation gate between each pair of steps.</desc><rect x="6" y="42" width="786" height="180" fill="#ffffff"/><g fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2"><rect x="24" y="56" width="170" height="72" rx="8"/><rect x="214" y="56" width="170" height="72" rx="8"/><rect x="404" y="56" width="170" height="72" rx="8"/><rect x="594" y="56" width="180" height="72" rx="8"/></g><g fill="#1f2937" font-size="12.5" text-anchor="middle" font-weight="600"><text x="109" y="84">select</text><text x="299" y="84">buffer</text><text x="489" y="84">intersect</text><text x="684" y="84">difference</text></g><g fill="#5b6471" font-size="12" text-anchor="middle"><text x="109" y="108">residential parcels</text><text x="299" y="108">watercourses, 200 m</text><text x="489" y="108">the two results</text><text x="684" y="108">minus the flood zone</text></g><g stroke="#5b6471" stroke-width="2" marker-end="url(#lgp-chain-a)"><line x1="196" y1="92" x2="210" y2="92"/><line x1="386" y1="92" x2="400" y2="92"/><line x1="576" y1="92" x2="590" y2="92"/></g><defs><marker id="lgp-chain-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5b6471"/></marker></defs><rect x="24" y="156" width="750" height="52" rx="8" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><text x="399" y="188" fill="#1f2937" font-size="13" text-anchor="middle" font-weight="600">a validation gate between every pair: non-empty, valid, in the expected frame, plausibly sized</text></svg>
+<figcaption><b>The gates are where the analysis becomes defensible.</b> Each operation can succeed and produce an empty or degenerate result, and without a check the next step consumes it happily and the chain ends in a confident zero.</figcaption>
 </figure>
 
-## Step 1: Constrained Prompt Design & Schema Validation
+## Foundational Principles
 
-Open-ended LLM generation introduces unacceptable variance in production environments. The routing layer must reject free-form text and instead parse strictly validated JSON payloads. By leveraging schema validators, the orchestrator prompt defines allowable spatial operations, target backends, parameter constraints, and explicit CRS requirements. This eliminates hallucinated function names, prevents silent CRS mismatches, and guarantees that downstream executors receive deterministic, type-safe instructions.
+**Decompose before executing.** The whole chain is planned, reviewed and estimated before the first operation runs. A pipeline assembled step by step as the model reacts to each result cannot be costed, cannot be checkpointed, and cannot be explained afterwards.
 
-The following Pydantic schema enforces spatial constraints at the prompt boundary. It validates CRS compatibility, restricts operations to a known enum, and requires tolerance thresholds for geometric operations.
+**Every intermediate result is validated.** Non-empty, valid, in the expected frame, and of a plausible size. Those four checks catch nearly every silent failure, and they are cheap relative to the operations they guard.
 
-```python
-from enum import Enum
-from typing import Optional, Literal
-from pydantic import BaseModel, Field, field_validator, ValidationError
-from pyproj import CRS
+**An empty intermediate is a stop, not a value.** A buffer that produced nothing, an intersection that found nothing — these mean the analysis has already failed, and continuing produces an answer about nothing that reads like an answer about something.
 
-class SpatialOperation(str, Enum):
-    BUFFER = "buffer"
-    INTERSECT = "intersect"
-    UNION = "union"
-    SPATIAL_JOIN = "spatial_join"
-    CLIP = "clip"
+## Step-by-Step Implementation Pipeline
 
-class GeoprocessingPayload(BaseModel):
-    operation: SpatialOperation
-    backend: Literal["geopandas", "postgis"]
-    source_table: str
-    target_table: Optional[str] = None
-    input_crs: str = Field(..., description="EPSG code (e.g., 'EPSG:4326')")
-    output_crs: str
-    tolerance_meters: float = Field(ge=0.0, le=1000.0)
-    parameters: dict = Field(default_factory=dict)
+### 1. Decompose the request into a typed plan
 
-    @field_validator("input_crs", "output_crs")
-    @classmethod
-    def validate_crs(cls, v: str) -> str:
-        try:
-            crs = CRS.from_user_input(v)
-            if not crs.is_geographic and not crs.is_projected:
-                raise ValueError(f"Unsupported CRS type: {v}")
-            return crs.to_string()
-        except Exception as e:
-            raise ValueError(f"Invalid CRS definition: {e}")
-
-    @field_validator("backend")
-    @classmethod
-    def enforce_backend_constraints(cls, v: str, info) -> str:
-        op = info.data.get("operation")
-        if op in (SpatialOperation.SPATIAL_JOIN, SpatialOperation.UNION) and v == "geopandas":
-            raise ValueError("Heavy topological operations must route to PostGIS backend")
-        return v
-```
-
-When integrating this schema into an LLM prompt, the system prompt must explicitly forbid free-text outputs and mandate JSON-only responses matching the schema. Validation failures should immediately halt execution and return a structured error code rather than attempting fallback execution on malformed instructions.
-
-## Step 2: Deterministic Tool Routing & Execution
-
-Once validated, the payload routes to the appropriate spatial backend based on computational complexity, data volume, and memory constraints. Lightweight transformations, attribute joins, and simple buffers route to in-memory workflows. Heavy spatial predicates, indexed spatial joins, and large-scale aggregations route to PostGIS.
-
-The execution layer must enforce strict connection pooling, query timeouts, and explicit `EXPLAIN ANALYZE` hooks for database operations. For in-memory execution, GeoDataFrames must be instantiated with pre-validated CRS alignment, memory caps, and explicit `.copy()` semantics to prevent reference mutation.
+The plan is a list of typed steps with named inputs and outputs, produced once and reviewable as data.
 
 ```python
-import geopandas as gpd
-import psycopg2
-from contextlib import contextmanager
 import logging
-from typing import Dict, Any
+from dataclasses import dataclass
+from typing import Literal, Optional, Sequence
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger("geoprocessing_plan")
 
-class SpatialRouter:
-    def __init__(self, db_config: Dict[str, str], memory_limit_mb: int = 2048):
-        self.db_config = db_config
-        self.memory_limit_mb = memory_limit_mb
+Op = Literal["select", "buffer", "intersect", "difference", "dissolve", "aggregate"]
 
-    @contextmanager
-    def _get_db_connection(self):
-        conn = psycopg2.connect(**self.db_config, connect_timeout=10)
-        try:
-            yield conn
-        finally:
-            conn.close()
 
-    def execute(self, payload: GeoprocessingPayload) -> Dict[str, Any]:
-        if payload.backend == "postgis":
-            return self._execute_postgis(payload)
-        return self._execute_geopandas(payload)
+@dataclass(frozen=True)
+class Step:
+    name: str
+    op: Op
+    inputs: tuple[str, ...]              # names of earlier steps or source layers
+    params: dict
 
-    def _execute_geopandas(self, payload: GeoprocessingPayload) -> Dict[str, Any]:
-        logger.info(f"Routing to in-memory backend: {payload.operation}")
-        gdf = gpd.read_file(payload.source_table)
 
-        # Enforce CRS
-        if gdf.crs is None or gdf.crs.to_string() != payload.input_crs:
-            gdf = gdf.to_crs(payload.input_crs)
+@dataclass(frozen=True)
+class Plan:
+    steps: tuple[Step, ...]
+    result: str                          # the step whose output is the answer
 
-        gdf = gdf.copy()
 
-        if payload.operation == SpatialOperation.BUFFER:
-            # Buffer in meters requires a projected CRS; reproject if geographic
-            if gdf.crs.is_geographic:
-                gdf = gdf.to_crs("EPSG:3857")
-            gdf["geometry"] = gdf.geometry.buffer(payload.tolerance_meters)
-            gdf = gdf.to_crs(payload.output_crs)
-
-        return {"status": "success", "row_count": len(gdf), "crs": gdf.crs.to_string()}
-
-    def _execute_postgis(self, payload: GeoprocessingPayload) -> Dict[str, Any]:
-        logger.info(f"Routing to PostGIS backend: {payload.operation}")
-        with self._get_db_connection() as conn:
-            with conn.cursor() as cur:
-                # Use EXPLAIN ANALYZE for performance auditing in non-production
-                query = """
-                    SELECT ST_Transform(
-                        ST_Intersection(a.geom, b.geom),
-                        %s
-                    ) AS geom
-                    FROM %s a
-                    JOIN %s b ON ST_Intersects(a.geom, b.geom)
-                    WHERE ST_IsValid(a.geom) AND ST_IsValid(b.geom);
-                """
-                # Note: table names cannot be parameterized safely with %s in psycopg2;
-                # use psycopg2.sql.Identifier for production table name injection.
-                from psycopg2 import sql
-                safe_query = sql.SQL("""
-                    SELECT ST_Transform(
-                        ST_Intersection(a.geom, b.geom),
-                        %(output_srid)s
-                    ) AS geom
-                    FROM {src} a
-                    JOIN {tgt} b ON ST_Intersects(a.geom, b.geom)
-                    WHERE ST_IsValid(a.geom) AND ST_IsValid(b.geom)
-                """).format(
-                    src=sql.Identifier(payload.source_table),
-                    tgt=sql.Identifier(payload.target_table or payload.source_table)
-                )
-                cur.execute(safe_query, {"output_srid": int(payload.output_crs.split(":")[-1])})
-                conn.commit()
-        return {"status": "success"}
+class PlanRejected(ValueError):
+    """The plan cannot be executed as written."""
 ```
 
-This routing pattern ensures that computationally expensive operations never saturate application memory. When constructing parameterized PostGIS queries from natural language, the system leverages [Prompt-to-Spatial-SQL Generation](https://www.spatialllm.org/geospatial-prompt-engineering-tool-routing/prompt-to-spatial-sql-generation/) patterns to maintain index utilization and prevent query plan degradation.
+### 2. Check the plan before running any of it
 
-## Step 3: Explicit Validation & Error Mapping
-
-Spatial pipelines fail differently than traditional tabular pipelines. Geometry validity, precision loss, and topology violations are the primary failure vectors. A production pipeline must validate outputs before committing them to storage, map spatial exceptions to a standardized taxonomy, and optionally trigger LLM-assisted topology correction routines.
-
-The following validation module enforces geometry integrity, applies tolerance-based snapping, and maps errors to actionable codes. It integrates seamlessly with the execution layer and provides hooks for automated topology rule enforcement.
+Most bad plans are detectable statically: a step referencing an output that does not exist, an operation applied to the wrong geometry type, a chain whose result is not produced by any step.
 
 ```python
-from shapely.validation import make_valid
-from shapely.geometry.base import BaseGeometry
-import traceback
+GEOMETRY_REQUIREMENTS = {
+    "buffer":     {"Point", "LineString", "Polygon", "MultiPolygon"},
+    "intersect":  {"Polygon", "MultiPolygon"},
+    "difference": {"Polygon", "MultiPolygon"},
+    "dissolve":   {"Polygon", "MultiPolygon"},
+}
 
-class SpatialErrorTaxonomy:
-    INVALID_GEOMETRY = "ERR_GEO_001"
-    TOPOLOGY_VIOLATION = "ERR_TOPO_002"
-    CRS_MISMATCH = "ERR_CRS_003"
-    EXECUTION_TIMEOUT = "ERR_EXEC_004"
 
-def validate_and_map_output(gdf: gpd.GeoDataFrame, payload: GeoprocessingPayload) -> Dict[str, Any]:
-    try:
-        # Enforce CRS alignment post-execution
-        if gdf.crs is None or gdf.crs.to_string() != payload.output_crs:
-            raise ValueError(SpatialErrorTaxonomy.CRS_MISMATCH)
-
-        # Geometry validation & repair
-        invalid_mask = ~gdf.geometry.is_valid
-        if invalid_mask.any():
-            logger.warning(f"Repairing {invalid_mask.sum()} invalid geometries")
-            gdf = gdf.copy()
-            gdf.loc[invalid_mask, "geometry"] = gdf.loc[invalid_mask, "geometry"].apply(make_valid)
-
-        # Confirm all geometries are now valid
-        if not gdf.geometry.is_valid.all():
-            raise ValueError(SpatialErrorTaxonomy.TOPOLOGY_VIOLATION)
-
-        return {"status": "valid", "data": gdf}
-
-    except Exception as e:
-        error_code = str(e) if str(e).startswith("ERR_") else SpatialErrorTaxonomy.INVALID_GEOMETRY
-        logger.error(f"Spatial validation failed: {error_code} | {traceback.format_exc()}")
-        return {"status": "failed", "error_code": error_code, "trace": traceback.format_exc()}
+def check_plan(plan: Plan, sources: dict[str, str]) -> Plan:
+    """Static checks: references resolve, types match, the result exists."""
+    produced: dict[str, str] = dict(sources)          # name -> geometry type
+    for step in plan.steps:
+        for ref in step.inputs:
+            if ref not in produced:
+                raise PlanRejected(f"step {step.name!r} references unknown input {ref!r}")
+        allowed = GEOMETRY_REQUIREMENTS.get(step.op)
+        if allowed:
+            for ref in step.inputs:
+                if produced[ref] not in allowed:
+                    raise PlanRejected(
+                        f"{step.op} cannot take {produced[ref]} from {ref!r}")
+        produced[step.name] = _output_type(step.op, [produced[r] for r in step.inputs])
+    if plan.result not in produced:
+        raise PlanRejected(f"the plan's result {plan.result!r} is not produced by any step")
+    return plan
 ```
 
-When topology violations persist after automated repair, the pipeline can route the failure context to an LLM for rule interpretation and constraint relaxation. This pattern is detailed in [Topology Rule Enforcement via LLMs](https://www.spatialllm.org/geospatial-prompt-engineering-tool-routing/topology-rule-enforcement-via-llms/), which covers how generative models can dynamically adjust tolerance thresholds or suggest alternative spatial predicates without compromising data integrity.
+Type-checking the chain statically catches the most common planning error — buffering a polygon and then intersecting with a line, or dissolving something that is not an area — before any expensive operation runs. The decomposition itself is developed in [decomposing natural language into geoprocessing steps](/geospatial-prompt-engineering-tool-routing/llm-assisted-geoprocessing-pipelines/decomposing-natural-language-into-geoprocessing-steps/).
 
-## Step 4: Production Deployment & Observability
+### 3. Estimate the whole chain, not each step
 
-Deploying LLM-assisted geoprocessing pipelines requires explicit observability and execution guarantees. Spatial operations are inherently non-deterministic in runtime due to data skew, index fragmentation, and CRS transformation overhead. Platform teams should implement:
+A chain's cost is dominated by the step with the largest intermediate, which is frequently not the step that looks expensive. Estimating the whole plan lets the agent trade a cheaper decomposition before anything runs.
 
-1. **Async/Sync Workflow Segregation**: Route synchronous requests to lightweight in-memory operations, while offloading batch PostGIS jobs to message queues (e.g., Celery, RabbitMQ) with explicit timeout guards.
-2. **Structured Spatial Logging**: Capture CRS transformations, geometry repair counts, and execution plans in JSON-formatted logs for downstream auditing.
-3. **Metric Collection**: Expose Prometheus metrics for `spatial_operation_duration_seconds`, `geometry_repair_rate`, and `backend_routing_distribution`.
-4. **Connection Pooling & Query Timeouts**: Use `SQLAlchemy` or `psycopg2` connection pools with `statement_timeout` set at the database level to prevent runaway spatial joins.
+```python
+def estimate_chain(plan: Plan, sizes: dict[str, int]) -> tuple[int, str]:
+    """Track the largest intermediate; that is what the chain will cost."""
+    current = dict(sizes)
+    peak, peak_step = 0, ""
+    for step in plan.steps:
+        inputs = [current.get(r, 0) for r in step.inputs]
+        if step.op == "buffer":
+            out = inputs[0]
+        elif step.op in {"intersect", "difference"}:
+            out = int(max(inputs) * 1.2)              # overlays can add vertices and parts
+        elif step.op == "dissolve":
+            out = max(1, inputs[0] // 10)
+        else:
+            out = inputs[0] if inputs else 0
+        current[step.name] = out
+        if out > peak:
+            peak, peak_step = out, step.name
+    return peak, peak_step
+```
 
-By combining schema-enforced prompt boundaries, deterministic backend routing, and explicit topology validation, LLM-Assisted Geoprocessing Pipelines deliver reproducible, production-grade spatial data engineering. This architecture bridges the gap between natural language intent and geospatial execution, ensuring that AI-driven workflows maintain the rigor required for enterprise mapping, environmental modeling, and infrastructure planning.
+### 4. Validate between every pair of steps
+
+The four checks are the same each time, and running them uniformly is what makes the chain's failure modes predictable.
+
+```python
+@dataclass(frozen=True)
+class Check:
+    ok: bool
+    reason: str
+
+
+def validate_intermediate(result, expected_epsg: int, input_count: int,
+                          step_name: str) -> Check:
+    """Four checks that catch nearly every silent intermediate failure."""
+    if result is None or len(result) == 0:
+        return Check(False, f"{step_name} produced no features")
+    invalid = sum(1 for g in result.geometry if g is not None and not g.is_valid)
+    if invalid:
+        return Check(False, f"{step_name} produced {invalid} invalid geometries")
+    epsg = getattr(result.crs, "to_epsg", lambda: None)()
+    if epsg != expected_epsg:
+        return Check(False, f"{step_name} output is in EPSG:{epsg}, expected {expected_epsg}")
+    if input_count and len(result) > input_count * 50:
+        return Check(False,
+                     f"{step_name} produced {len(result)} features from {input_count} "
+                     "inputs — check for an unintended cross join")
+    return Check(True, "")
+```
+
+The size sanity check is the one that catches the most expensive mistake. An overlay against the wrong layer produces a cross product, and the result is a valid, non-empty, correctly framed dataset of two million slivers that the next step will happily consume. The full set of checks is developed in [validating intermediate geoprocessing outputs](/geospatial-prompt-engineering-tool-routing/llm-assisted-geoprocessing-pipelines/validating-intermediate-geoprocessing-outputs/).
+
+<figure class="diagram">
+<svg viewBox="16 36 705 192" role="img" aria-labelledby="lgp-empty-t lgp-empty-d" xmlns="http://www.w3.org/2000/svg"><title id="lgp-empty-t">An empty intermediate propagating to a confident zero</title><desc id="lgp-empty-d">A buffer that produced nothing feeds an intersection that produces nothing, which feeds a count that returns zero — a well-formed answer to a question the chain never actually asked.</desc><rect x="16" y="36" width="705" height="192" fill="#ffffff"/><rect x="30" y="50" width="150" height="56" rx="6" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="196" y="50" width="150" height="56" rx="6" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><rect x="362" y="50" width="150" height="56" rx="6" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><rect x="528" y="50" width="150" height="56" rx="6" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><g fill="#1f2937" font-size="12" text-anchor="middle"><text x="105" y="82">840 parcels</text><text x="271" y="82">0 buffers</text><text x="437" y="82">0 features</text><text x="603" y="82">count: 0</text></g><text x="390" y="140" fill="#5b6471" font-size="12.5" text-anchor="middle">every step succeeded; the answer is a confident zero about nothing</text><rect x="196" y="164" width="150" height="50" rx="6" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><text x="271" y="194" fill="#1f2937" font-size="12" text-anchor="middle">gate stops here</text><text x="366" y="194" fill="#1f2937" font-size="12.5">reason: the watercourse layer was empty here</text></svg>
+<figcaption><b>Zero is the most dangerous valid answer.</b> It is well-formed, it is what the arithmetic produced, and it is indistinguishable from a genuine finding unless something checked the step that first produced nothing.</figcaption>
+</figure>
+
+### 5. Stop on a failed check, with the step named
+
+A failed intermediate is a stop, and the message needs the step name and the reason — that is what turns a dead chain into a correctable plan.
+
+```python
+def run_chain(plan: Plan, execute, expected_epsg: int) -> dict:
+    """Execute with a gate after every step. Stops at the first failure."""
+    results: dict[str, object] = {}
+    for step in plan.steps:
+        inputs = [results.get(r) for r in step.inputs]
+        try:
+            out = execute(step, inputs)
+        except Exception as exc:
+            return {"ok": False, "failed_at": step.name, "reason": f"execution failed: {exc}"}
+        check = validate_intermediate(out, expected_epsg,
+                                      sum(len(i) for i in inputs if i is not None),
+                                      step.name)
+        if not check.ok:
+            log.info("chain stopped at %s: %s", step.name, check.reason)
+            return {"ok": False, "failed_at": step.name, "reason": check.reason}
+        results[step.name] = out
+    return {"ok": True, "result": results[plan.result], "steps": list(results)}
+```
+
+### 6. Keep the plan and the result together
+
+An analysis result without its plan cannot be defended or repeated. Returning both, with the parameters that produced each step, is what makes a number a finding rather than an assertion.
+
+```python
+def to_finding(plan: Plan, result, notes: Sequence[str]) -> dict:
+    return {
+        "value": summarise(result),
+        "method": [{"step": s.name, "op": s.op, "params": s.params} for s in plan.steps],
+        "notes": list(notes),
+    }
+```
+
+### 7. Prefer a plan the database can run in one pass
+
+A chain of four operations executed as four round trips through a process is slower and more fragile than the same chain expressed as one query where the database can do it. Detecting that case is worth the effort for common shapes.
+
+```python
+FUSIBLE = ({"select", "buffer", "intersect"}, {"select", "intersect", "difference"})
+
+
+def can_fuse(plan: Plan) -> bool:
+    """Can this chain be expressed as a single query?"""
+    ops = {s.op for s in plan.steps}
+    return any(ops <= fusible for fusible in FUSIBLE) and len(plan.steps) <= 4
+```
+
+Fusing is an optimisation and not a requirement, and it should never change the result. Where a fused query and a stepwise chain disagree, the stepwise chain is the reference — it is the one whose intermediates were checked. The specific pattern of buffer, overlay and dissolve chains is covered in [planning buffer, overlay and dissolve chains from a prompt](/geospatial-prompt-engineering-tool-routing/llm-assisted-geoprocessing-pipelines/planning-buffer-overlay-dissolve-chains-from-a-prompt/).
+
+### 8. Record what each step actually produced
+
+Row counts per step are the cheapest diagnostic in the whole topic. A chain that ended in zero is explained instantly by the step where the count first became zero, and that number costs nothing to record.
+
+```python
+def step_counts(results: dict[str, object]) -> dict[str, int]:
+    return {name: (len(value) if value is not None else 0)
+            for name, value in results.items()}
+```
+
+### 9. Resolve source layers against the catalog at plan time
+
+A plan referencing a layer that does not exist should fail while it is still a plan, not three steps into execution. Resolving names against the live catalog during the static check is what makes that happen, and it also catches the more dangerous case of a name that resolves to something other than what was meant.
+
+```python
+def resolve_sources(plan: Plan, catalog) -> dict[str, str]:
+    """Map every source name to a real layer and its geometry type, or reject."""
+    sources: dict[str, str] = {}
+    referenced = {ref for step in plan.steps for ref in step.inputs}
+    step_names = {step.name for step in plan.steps}
+    for ref in sorted(referenced - step_names):
+        record = catalog.get(ref)
+        if record is None:
+            raise PlanRejected(
+                f"source layer {ref!r} does not exist; available layers are "
+                f"{', '.join(sorted(catalog)[:8])}")
+        if record.get("deprecated"):
+            log.info("plan uses deprecated layer %r (successor: %s)",
+                     ref, record.get("successor"))
+        sources[ref] = record["geometry_type"]
+    return sources
+```
+
+Listing the available layers in the rejection is what makes it recoverable in one turn. A model told that a layer does not exist will invent another plausible name; told which names exist, it picks one.
+
+### 10. Keep the plan reproducible across data versions
+
+A finding produced against last month's data cannot be compared with one produced today unless both record which version they ran against. Stamping the source versions onto the plan makes a re-run either identical or explicitly different.
+
+```python
+def stamp_versions(plan: Plan, catalog) -> dict:
+    """Record the version of every source the plan touches."""
+    referenced = {ref for step in plan.steps for ref in step.inputs}
+    step_names = {step.name for step in plan.steps}
+    return {ref: catalog[ref].get("version", "unversioned")
+            for ref in sorted(referenced - step_names) if ref in catalog}
+```
+
+The unversioned default is deliberately visible. A source with no version is one whose findings cannot be reproduced, and seeing that string in a stored result is more useful than an absent field nobody notices — it is a prompt to fix the source rather than the analysis.
+
+## Operating This Stage Over Time
+
+Plans acquire steps. A chain that started as three operations grows a filter, then a reprojection, then a cleanup, and each addition is individually justified. The cost is not just latency: every additional step is another place an intermediate can be empty, and a seven-step chain fails more often than a three-step one for reasons that have nothing to do with the data. Reviewing chain length distribution occasionally, and asking whether the longest ones could be expressed differently, is worth more than optimising any single step.
+
+Source layers change beneath a plan. A layer renamed or re-partitioned upstream turns a working plan into a static check failure, which is the good case, or into a plan that runs against a different layer with the same name, which is not. Validating source names against the live catalog at plan time — not at execution time — turns the second case into the first.
+
+The size sanity threshold needs attention as data grows. A multiplier that flagged cross joins against a corpus of thousands will flag legitimate results against a corpus of millions, and once it produces false positives it gets raised until it no longer fires. Derive it from the operation rather than from a constant: an intersection legitimately produces more features than its inputs, a dissolve produces fewer, and a buffer produces the same number.
+
+Finally, keep the reference implementation stepwise even after fusing is introduced. The fused path is faster and unvalidated between steps, and the day the two disagree you will want the one whose intermediates were checked to be the one you trust.
+
+## Failure Modes & Root Causes
+
+**The confident zero.** Every step succeeds, the answer is zero, and no step produced anything after the second. Root cause: no gate on empty intermediates. Mitigation: stop at the first empty result, naming the step.
+
+**The cross join.** An overlay against the wrong layer produces millions of slivers, and the chain continues. Root cause: no size sanity check. Mitigation: bound the output size relative to the inputs, per operation.
+
+**The frame slip.** One step returns geometry in a different frame and the next overlays it against the original, producing an empty or nonsensical result. Root cause: frames checked at ingestion but not between steps. Mitigation: check the frame on every intermediate.
+
+**The unrepeatable finding.** A number is produced and nobody can reconstruct how. Root cause: the plan discarded after execution. Mitigation: return the plan with the result, always.
+
+## Production Validation Protocols
+
+1. **Static plan check.** Assert every plan passes reference resolution and geometry-type checking before execution; a plan that fails should never reach a database.
+2. **Empty-intermediate test.** Assert a chain whose second step produces nothing stops there, with that step named.
+3. **Cross-join guard test.** Assert an overlay producing far more features than its inputs is stopped, using a fixture that triggers it.
+4. **Frame-consistency test.** Assert an intermediate in an unexpected frame stops the chain rather than being reprojected silently.
+5. **Fusion equivalence test.** Where fusing is enabled, assert the fused and stepwise paths produce identical results on a fixture set.
+6. **Step-count publication.** Publish per-step row counts with every finding; they are the diagnostic that explains a surprising answer.
+
+<figure class="diagram">
+<svg viewBox="16 38 748 192" role="img" aria-labelledby="lgp-gates-t lgp-gates-d" xmlns="http://www.w3.org/2000/svg"><title id="lgp-gates-t">The four checks applied at every gate</title><desc id="lgp-gates-d">Non-empty, valid geometry, expected frame and plausible size — four cheap checks that between them catch nearly every silent intermediate failure.</desc><rect x="16" y="38" width="748" height="192" fill="#ffffff"/><rect x="30" y="52" width="170" height="120" rx="8" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="216" y="52" width="170" height="120" rx="8" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="402" y="52" width="170" height="120" rx="8" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="588" y="52" width="162" height="120" rx="8" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><g fill="#1f2937" font-size="13" text-anchor="middle" font-weight="600"><text x="115" y="84">non-empty</text><text x="301" y="84">valid</text><text x="487" y="84">right frame</text><text x="669" y="84">plausible size</text></g><g fill="#5b6471" font-size="12" text-anchor="middle"><text x="115" y="112">catches the</text><text x="115" y="134">confident zero</text><text x="301" y="112">catches repairs</text><text x="301" y="134">the next step needs</text><text x="487" y="112">catches a slip</text><text x="487" y="134">between steps</text><text x="669" y="112">catches a</text><text x="669" y="134">cross join</text></g><text x="390" y="212" fill="#1f2937" font-size="13" text-anchor="middle">Four comparisons per step, and between them nearly every silent failure</text></svg>
+<figcaption><b>Cheap checks, expensive failures.</b> Each of these is a length, a boolean or an integer comparison, and each one guards against a failure that otherwise reaches an answer intact.</figcaption>
+</figure>
+
+## Frequently Asked Questions
+
+<details class="faq-item"><summary><span>Should the model see intermediate results?</span></summary><p>Counts and validity, not geometry. A model told that the buffer step produced 1,240 features can reason about whether that is plausible and can explain the finding; a model handed the geometry spends context on data it cannot use and occasionally starts reasoning about individual features. The exception is a short chain over a handful of features, where the geometry is small and genuinely informative.</p></details>
+
+<details class="faq-item"><summary><span>How long should a chain be allowed to get?</span></summary><p>Four or five steps covers most real analyses, and a plan longer than that is usually two analyses or one that should be expressed differently. Longer chains are not wrong, but each step multiplies the ways the whole can fail and lengthens the explanation the answer needs. A cap with an override, plus a log of overrides, keeps the pressure in the right direction.</p></details>
+
+<details class="faq-item"><summary><span>What should happen when a step succeeds but produces something implausible?</span></summary><p>Stop, and say what was implausible. A dissolve that produced more features than it consumed, an intersection larger than either input, a buffer that changed the feature count — these are all valid outputs and all signals that the plan does not mean what it appears to. Continuing produces an answer nobody can defend, and the check costs one comparison.</p></details>
+
+<details class="faq-item"><summary><span>Can the plan be repaired automatically when a check fails?</span></summary><p>Sometimes, and it should be offered rather than applied. A frame mismatch has an obvious repair, and applying it silently means the chain now contains a step nobody planned. Returning the failure with a suggested amendment lets the agent re-plan explicitly, which keeps the plan and the execution in agreement — which is the property that makes the finding defensible.</p></details>
+
+<details class="faq-item"><summary><span>How does this differ from orchestration?</span></summary><p>Scope and durability. A pipeline is one analysis planned up front and executed within a turn; orchestration handles chains that span turns, checkpoint state and survive failures partway through. The boundary is roughly whether the work fits in an interactive budget — see <a href="/geospatial-prompt-engineering-tool-routing/multi-step-spatial-agent-orchestration/">multi-step spatial agent orchestration</a> for what happens when it does not.</p></details>
+
+## Related
+
+- Up to the section overview: [Geospatial Prompt Engineering and Tool Routing](/geospatial-prompt-engineering-tool-routing/)
+- Technique: [Decomposing Natural Language into Geoprocessing Steps](/geospatial-prompt-engineering-tool-routing/llm-assisted-geoprocessing-pipelines/decomposing-natural-language-into-geoprocessing-steps/)
+- Technique: [Validating Intermediate Geoprocessing Outputs](/geospatial-prompt-engineering-tool-routing/llm-assisted-geoprocessing-pipelines/validating-intermediate-geoprocessing-outputs/)
+- Technique: [Planning Buffer, Overlay and Dissolve Chains from a Prompt](/geospatial-prompt-engineering-tool-routing/llm-assisted-geoprocessing-pipelines/planning-buffer-overlay-dissolve-chains-from-a-prompt/)
+- Peer topic: [Multi-Step Spatial Agent Orchestration](/geospatial-prompt-engineering-tool-routing/multi-step-spatial-agent-orchestration/)
+- Peer topic: [Topology Rule Enforcement via LLMs](/geospatial-prompt-engineering-tool-routing/topology-rule-enforcement-via-llms/)

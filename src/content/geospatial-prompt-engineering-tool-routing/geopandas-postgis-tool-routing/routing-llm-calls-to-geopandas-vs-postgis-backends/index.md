@@ -1,3 +1,13 @@
+---
+title: Routing LLM Calls to GeoPandas vs PostGIS Backends
+description: Implement the router that sends each spatial operation to the database or the process, with the estimate, the thresholds and the recorded reason.
+slug: routing-llm-calls-to-geopandas-vs-postgis-backends
+type: howto
+breadcrumb: Routing to a Backend
+datePublished: 2025-03-19
+dateModified: 2026-08-11
+---
+
 # Routing LLM Calls to GeoPandas vs PostGIS Backends
 
 In production geospatial AI agents, the decision to execute spatial operations in-memory via GeoPandas versus delegating to a PostGIS database is rarely a static configuration. It is a dynamic routing problem that directly impacts latency, memory footprint, and topological correctness. When an LLM generates a tool call, the orchestrator must parse intent, estimate data volume, evaluate spatial complexity, and route to the appropriate execution backend. Misrouting triggers cascading failures: out-of-memory crashes on large `.sjoin()` operations, silent coordinate reference system (CRS) drift during in-memory transformations, or planner misestimates causing PostGIS query timeouts. Implementing deterministic routing requires strict validation layers, explicit complexity scoring, and fallback mechanisms that preserve pipeline integrity.
@@ -11,7 +21,12 @@ A robust routing matrix evaluates three dimensions:
 2. **Spatial Complexity**: Topology-heavy operations (`ST_Contains`, `ST_Overlaps`, `ST_DWithin` with large radii) benefit from PostGIS spatial indexes and parallel query execution. Simple attribute filters or lightweight transformations (`centroid`, `buffer` with small distances) remain efficient in GeoPandas.
 3. **Concurrency & State**: GeoPandas operations are synchronous and block the event loop. PostGIS integrates cleanly with async drivers (`asyncpg`, `SQLAlchemy 2.0+`), enabling non-blocking pipeline execution.
 
-When LLM-generated tool calls bypass these checks, pipelines experience unpredictable degradation. The architecture documented in [Geospatial Prompt Engineering & Tool Routing](https://www.spatialllm.org/geospatial-prompt-engineering-tool-routing/) establishes baseline patterns for intercepting and validating spatial tool payloads before execution.
+When LLM-generated tool calls bypass these checks, pipelines experience unpredictable degradation. The architecture documented in [Geospatial Prompt Engineering & Tool Routing](/geospatial-prompt-engineering-tool-routing/) establishes baseline patterns for intercepting and validating spatial tool payloads before execution.
+
+<figure class="diagram">
+<svg viewBox="16 38 748 188" role="img" aria-labelledby="rlc-two-t rlc-two-d" xmlns="http://www.w3.org/2000/svg"><title id="rlc-two-t">What each backend is actually good at</title><desc id="rlc-two-d">The database wins when the data is large and already indexed there; the in-process library wins when the data is small, already in memory, or the operation is awkward to express in SQL.</desc><rect x="16" y="38" width="748" height="188" fill="#ffffff"/><rect x="30" y="52" width="340" height="160" rx="8" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><rect x="410" y="52" width="340" height="160" rx="8" fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2"/><g fill="#1f2937" font-size="13.5" text-anchor="middle" font-weight="600"><text x="200" y="84">send it to the database</text><text x="580" y="84">keep it in process</text></g><g fill="#5b6471" font-size="12" text-anchor="middle"><text x="200" y="114">millions of rows</text><text x="200" y="140">an index already exists</text><text x="200" y="166">the answer is an aggregate</text><text x="580" y="114">thousands of rows</text><text x="580" y="140">the data is already loaded</text><text x="580" y="166">the operation is awkward in SQL</text></g></svg>
+<figcaption><b>Neither backend is the default.</b> Routing everything one way produces either a database doing arithmetic on four rows or a process trying to load a continent.</figcaption>
+</figure>
 
 ## Failure Modes & Root Causes
 
@@ -124,6 +139,11 @@ def execute_with_fallback(routing_decision: Dict[str, Any], gdf: gpd.GeoDataFram
 
 This pattern ensures that coordinate validation occurs before any spatial math, memory thresholds trigger proactive offloading, and explicit error handling prevents silent corruption.
 
+<figure class="diagram">
+<svg viewBox="16 38 728 212" role="img" aria-labelledby="rlc-cost-t rlc-cost-d" xmlns="http://www.w3.org/2000/svg"><title id="rlc-cost-t">Where the time actually goes</title><desc id="rlc-cost-d">For large inputs the transfer dominates and the database wins; for small ones the round trip dominates and the in-process path wins, and the crossover is measurable rather than a matter of taste.</desc><rect x="16" y="38" width="728" height="212" fill="#ffffff"/><rect x="30" y="52" width="700" height="46" rx="6" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><text x="50" y="80" fill="#1f2937" font-size="12.5">large input: transfer dominates — the database wins clearly</text><rect x="30" y="108" width="470" height="46" rx="6" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/><text x="50" y="136" fill="#1f2937" font-size="12.5">mid range: the two are within noise of each other</text><rect x="30" y="164" width="430" height="46" rx="6" fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2"/><text x="50" y="192" fill="#1f2937" font-size="12.5">small input: the round trip dominates — in process wins</text><text x="390" y="238" fill="#1f2937" font-size="13" text-anchor="middle">The crossover is a property of your data and hardware, not a constant to be copied</text></svg>
+<figcaption><b>Measure the crossover once, on your own data.</b> Borrowed thresholds are wrong by an order of magnitude often enough that the measurement is cheaper than the debugging.</figcaption>
+</figure>
+
 ## Pipeline Integration & Next Steps
 
 Integrating this routing layer into an AI agent framework requires three structural adjustments:
@@ -139,3 +159,32 @@ Integrating this routing layer into an AI agent framework requires three structu
 - **Benchmark & Tune Thresholds**: The `memory_threshold_mb` and complexity flags are environment-specific. Run load tests with representative production datasets to calibrate routing boundaries.
 
 By treating spatial routing as a deterministic, validation-first process rather than a prompt-matching heuristic, platform teams can eliminate cascading failures, enforce topological correctness, and scale geospatial AI agents reliably across heterogeneous workloads.
+
+<figure class="diagram">
+<svg viewBox="16 32 748 214" role="img" aria-labelledby="rlc-fall-t rlc-fall-d" xmlns="http://www.w3.org/2000/svg"><title id="rlc-fall-t">What the router does when the chosen backend fails</title><desc id="rlc-fall-d">A routing decision that cannot be revisited turns one backend's outage into a total failure; recording the decision and its inputs is what lets the fallback be automatic and explicable.</desc><rect x="16" y="32" width="748" height="214" fill="#ffffff"/><rect x="30" y="46" width="360" height="86" rx="8" fill="#e4f5ec" stroke="#12805c" stroke-width="2"/><text x="52" y="76" fill="#1f2937" font-size="13" font-weight="600">decision recorded</text><text x="52" y="102" fill="#5b6471" font-size="12">which backend and why</text><text x="52" y="122" fill="#5b6471" font-size="12">so the answer is explicable</text><rect x="410" y="46" width="340" height="86" rx="8" fill="#e3f0f4" stroke="#1f6b8a" stroke-width="2"/><text x="432" y="76" fill="#1f2937" font-size="13" font-weight="600">estimate available</text><text x="432" y="102" fill="#5b6471" font-size="12">row count and geometry cost</text><text x="432" y="122" fill="#5b6471" font-size="12">so the fallback is informed</text><rect x="30" y="146" width="360" height="86" rx="8" fill="#fdf3e0" stroke="#c46a3d" stroke-width="2"/><text x="52" y="176" fill="#1f2937" font-size="13" font-weight="600">fallback defined</text><text x="52" y="202" fill="#5b6471" font-size="12">the other backend, degraded</text><text x="52" y="222" fill="#5b6471" font-size="12">rather than a failure</text><rect x="410" y="146" width="340" height="86" rx="8" fill="#fdeaee" stroke="#b3324f" stroke-width="2"/><text x="432" y="176" fill="#1f2937" font-size="13" font-weight="600">no record kept</text><text x="432" y="202" fill="#5b6471" font-size="12">the fallback is a guess</text><text x="432" y="222" fill="#5b6471" font-size="12">and the answer is unexplainable</text></svg>
+<figcaption><b>The recorded decision is what makes the fallback safe.</b> Without the estimate that drove the original choice, falling back is just trying the other thing and hoping.</figcaption>
+</figure>
+
+## Operating This Step Over Time
+
+Routing thresholds are the part of this design that goes stale silently. Data grows, indexes are added and removed, and hardware changes, and the threshold that was correct at the time keeps producing decisions that are now wrong without any error being raised. Re-measuring the crossover after any material change to the data or the deployment is the maintenance this design needs, and it is a benchmark rather than a rewrite.
+
+The signal worth publishing is the distribution of routing decisions alongside their outcomes: how often each backend was chosen, and how often the chosen one was slower than the estimate predicted. Systematic underestimation on one side is the clearest evidence that a threshold has drifted.
+
+Watch for operations that always route the same way regardless of input. That is usually a sign the estimator has no useful signal for that operation — which is fine, provided the routing is then made explicit rather than left looking like a decision.
+
+## Frequently Asked Questions
+
+<details class="faq-item"><summary><span>Can the model make the routing decision?</span></summary><p>It can propose one, and it should not be trusted with it. The model has no access to row counts, index definitions or current load, so its choice is a guess dressed as a judgement. Let it express what it wants computed and let the router — which does have those numbers — decide where. That split also means the routing improves without touching prompts.</p></details>
+
+<details class="faq-item"><summary><span>What about operations that need both backends?</span></summary><p>Filter in the database and finish in process. This is the common and correct shape: a spatial predicate over an indexed column reduces millions of rows to hundreds, and the awkward part of the computation then runs on those hundreds where expressing it is easy. The mistake is doing the filtering in process, which transfers everything to discard most of it.</p></details>
+
+<details class="faq-item"><summary><span>How is the estimate obtained without running the query?</span></summary><p>From table statistics and the query planner, for the database side, and from the loaded frame's own length for the in-process side. Neither is exact and neither needs to be — the decision is between backends whose costs usually differ by more than the estimate's error. Where they do not, the choice does not matter much either.</p></details>
+
+<details class="faq-item"><summary><span>Should the user be told which backend ran?</span></summary><p>Not by default, and always in the trace. The backend is an implementation detail for a reader asking a question about their data, and it is the first thing anyone investigating a slow or surprising answer needs. Recording it and surfacing it on request satisfies both.</p></details>
+
+## Related
+
+- Up to the topic: [GeoPandas and PostGIS Tool Routing](/geospatial-prompt-engineering-tool-routing/geopandas-postgis-tool-routing/)
+- Sideways: [Handling Async Spatial Processing in Python Workflows](/geospatial-prompt-engineering-tool-routing/async-vs-sync-geoprocessing-workflows/handling-async-spatial-processing-in-python-workflows/)
+- Up to the section: [Geospatial Prompt Design and Tool Routing](/geospatial-prompt-engineering-tool-routing/)
